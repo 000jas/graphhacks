@@ -1,0 +1,3 @@
+FalkorDB>=1.8.0
+mcp[cli]>=2,<3
+python-dotenv>=1.0.0
