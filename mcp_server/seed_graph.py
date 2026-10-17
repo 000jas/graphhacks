@@ -207,8 +207,6 @@ NODES = [
 ]
 
 
-# Each tuple describes:
-# (source entity ID, relationship type, target entity ID)
 EDGES = [
     ("project-payments", "HAS_RELEASE", "release-payments-2026-10"),
     ("project-payments", "HAS_TEAM", "team-platform"),
@@ -326,7 +324,6 @@ def main() -> None:
         else:
             raise
 
-    # Create or update nodes without duplicating their stable IDs.
     for label, props in NODES:
         graph.query(
             f"""
@@ -337,7 +334,6 @@ def main() -> None:
             {"id": props["id"], "props": props},
         )
 
-    # Every relationship has a stable ID, so rerunning the seed is safe.
     for source, rel_type, target in EDGES:
         edge_id = f"{source}__{rel_type.lower()}__{target}"
         edge_props = {

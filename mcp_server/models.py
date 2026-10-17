@@ -118,6 +118,52 @@ class DecisionMemory:
     recorded_at: str = field(default_factory=utc_now)
 
 
+@dataclass
+class InvestigationFinding:
+    finding_id: str
+    title: str
+    objective: str
+    key_findings: list[str]
+    supporting_entity_ids: list[str]
+    evidence_path_ids: list[str] = field(default_factory=list)
+    confidence: str = "HIGH"
+    status: str = "ACTIVE"
+    created_at: str = field(default_factory=utc_now)
+    superseded_by: Optional[str] = None
+    superseded_reason: Optional[str] = None
+
+
+@dataclass
+class EvidenceQualityReport:
+    entity_id: Optional[str]
+    scope: str
+    total_edges_inspected: int
+    verified_edges_count: int
+    verification_rate: float
+    average_confidence: float
+    freshness_score: float
+    stale_relationships_count: int
+    unverified_edges: list[dict[str, Any]]
+    quality_rating: str
+    evaluated_at: str = field(default_factory=utc_now)
+    limitations: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SchemaSummary:
+    tenant_graph: str
+    total_nodes: int
+    total_edges: int
+    density: float
+    average_degree: float
+    connected_components: int
+    node_types: list[dict[str, Any]]
+    relationship_types: list[dict[str, Any]]
+    property_catalog: dict[str, list[dict[str, Any]]]
+    schema_anomalies: list[dict[str, Any]]
+    inspected_at: str = field(default_factory=utc_now)
+
+
 def serialize_json(data: Any) -> str:
     """Format structured responses consistently for MCP clients."""
     if hasattr(data, "__dataclass_fields__"):

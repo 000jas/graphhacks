@@ -3,9 +3,16 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from counterfactual import simulate_candidate_action
-from db import execute_ro_query, execute_rw_query
-from models import utc_now
+try:
+    from mcp_server.config import validate_identifier
+    from mcp_server.counterfactual import simulate_candidate_action
+    from mcp_server.db import execute_ro_query, execute_rw_query
+    from mcp_server.models import utc_now
+except ImportError:
+    from config import validate_identifier
+    from counterfactual import simulate_candidate_action
+    from db import execute_ro_query, execute_rw_query
+    from models import utc_now
 
 
 def propose_action(
@@ -321,4 +328,251 @@ def record_outcome(
         "variance_analysis": variance_analysis,
         "status": "SAVED_TO_ORGANIZATIONAL_MEMORY",
         "message": f"Durable memory record '{memory_id}' created and linked to {len(target_entity_ids)} entities.",
+    }
+
+
+def query_decision_memory(
+    query: str = "",
+    entity_id: str = "",
+    status: str = "",
+    limit: int = 20,
+    graph_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Retrieve historical organizational decisions, action proposals, executed outcomes,
+    and investigation findings with full provenance and status tracking.
+    """
+    limit = max(1, min(limit, 50))
+    where_clauses = ["m.kind IN ['MemoryRecord', 'ActionProposal', 'InvestigationFinding', 'AuditRecord']"]
+    params: dict[str, Any] = {}
+
+    if query.strip():
+        where_clauses.append("(toLower(m.name) CONTAINS toLower($q) OR toLower(m.summary) CONTAINS toLower($q) OR toLower(m.rationale) CONTAINS toLower($q))")
+        params["q"] = query.strip()
+
+    if status.strip():
+        where_clauses.append("toLower(m.status) = toLower($status) OR toLower(m.outcome_status) = toLower($status)")
+        params["status"] = status.strip()
+
+    match_clause = "MATCH (m:Entity)"
+    if entity_id.strip():
+        clean_eid = validate_identifier(entity_id, field_name="entity_id")
+        match_clause = "MATCH (target:Entity {id: $eid})-[r]-(m:Entity)"
+        params["eid"] = clean_eid
+
+    where_stmt = "WHERE " + " AND ".join(where_clauses)
+
+    cypher = f"""
+    {match_clause}
+    {where_stmt}
+    RETURN
+        m.id,
+        m.name,
+        m.kind,
+        coalesce(m.outcome_status, m.status, 'UNKNOWN') AS status,
+        coalesce(m.summary, m.rationale, m.objective, '') AS summary,
+        coalesce(m.recorded_at, m.created_at, m.executed_at, '') AS timestamp,
+        m.source_ref,
+        properties(m)
+    ORDER BY timestamp DESC
+    LIMIT {limit}
+    """
+    rows = execute_ro_query(cypher, params=params, graph_name=graph_name)
+
+    records = [
+        {
+            "id": r[0],
+            "name": r[1],
+            "kind": r[2],
+            "status": r[3],
+            "summary": r[4],
+            "timestamp": r[5],
+            "source_ref": r[6],
+            "properties": r[7],
+        }
+        for r in rows
+    ]
+
+    return {
+        "query": query,
+        "filtered_by_entity_id": entity_id or None,
+        "filtered_by_status": status or None,
+        "count": len(records),
+        "records": records,
+        "tenant_graph": graph_name or "default",
+    }
+
+
+def record_investigation_finding(
+    title: str,
+    objective: str,
+    key_findings: list[str],
+    supporting_entity_ids: list[str],
+    evidence_path_ids: Optional[list[str]] = None,
+    confidence: str = "HIGH",
+    graph_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Record a durable, graph-connected investigation finding with links to supporting entities and evidence.
+    """
+    title = (title or "").strip()
+    objective = (objective or "").strip()
+    if not title or not objective:
+        raise ValueError("title and objective are required to record an investigation finding")
+    if not supporting_entity_ids:
+        raise ValueError("supporting_entity_ids must contain at least one entity ID")
+
+    clean_eids = [validate_identifier(eid, field_name="supporting_entity_id") for eid in supporting_entity_ids]
+    evidence_path_ids = evidence_path_ids or []
+
+    finding_id = f"finding-{uuid.uuid4().hex[:10]}"
+    created_at = utc_now()
+
+    summary_text = "\n".join(f"- {f}" for f in key_findings) if key_findings else objective
+
+    execute_rw_query(
+        """
+        MERGE (f:Entity {id: $id})
+        SET f:InvestigationFinding
+        SET f.name = $title,
+            f.kind = 'InvestigationFinding',
+            f.objective = $objective,
+            f.summary = $summary,
+            f.confidence = $confidence,
+            f.status = 'ACTIVE',
+            f.created_at = $created_at,
+            f.source_ref = $source_ref
+        """,
+        params={
+            "id": finding_id,
+            "title": title,
+            "objective": objective,
+            "summary": summary_text,
+            "confidence": confidence.upper(),
+            "created_at": created_at,
+            "source_ref": f"graphos:finding:{finding_id}",
+        },
+        graph_name=graph_name,
+    )
+
+    for eid in clean_eids:
+        execute_rw_query(
+            """
+            MATCH (f:Entity {id: $fid})
+            MATCH (target:Entity {id: $eid})
+            MERGE (f)-[:EXPLAINS {id: $rel_id, observed_at: $created_at}]->(target)
+            """,
+            params={
+                "fid": finding_id,
+                "eid": eid,
+                "rel_id": f"{finding_id}__explains__{eid}",
+                "created_at": created_at,
+            },
+            graph_name=graph_name,
+        )
+
+    for path_id in evidence_path_ids:
+        execute_rw_query(
+            """
+            MATCH (f:Entity {id: $fid})
+            MATCH (ev:Entity {id: $pid})
+            MERGE (f)-[:TRACED_TO {id: $rel_id, observed_at: $created_at}]->(ev)
+            """,
+            params={
+                "fid": finding_id,
+                "pid": path_id,
+                "rel_id": f"{finding_id}__traced_to__{path_id}",
+                "created_at": created_at,
+            },
+            graph_name=graph_name,
+        )
+
+    return {
+        "finding_id": finding_id,
+        "title": title,
+        "status": "ACTIVE",
+        "confidence": confidence.upper(),
+        "supporting_entities_count": len(clean_eids),
+        "supporting_entities": clean_eids,
+        "created_at": created_at,
+        "message": f"Investigation finding '{finding_id}' permanently recorded and connected to graph entities.",
+        "tenant_graph": graph_name or "default",
+    }
+
+
+def supersede_finding(
+    finding_id: str,
+    reason: str,
+    superseding_finding_id: str = "",
+    new_evidence_refs: Optional[list[str]] = None,
+    graph_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Challenge or update a historical finding with newer evidence, marking it SUPERSEDED
+    while preserving permanent audit history.
+    """
+    finding_id = (finding_id or "").strip()
+    reason = (reason or "").strip()
+    if not finding_id or not reason:
+        raise ValueError("finding_id and reason are required to supersede a finding")
+
+    clean_fid = validate_identifier(finding_id, field_name="finding_id")
+
+    rows = execute_ro_query(
+        "MATCH (f:Entity {id: $id}) RETURN f.id, f.name, f.kind, f.status",
+        params={"id": clean_fid},
+        graph_name=graph_name,
+    )
+    if not rows:
+        return {
+            "finding_id": clean_fid,
+            "superseded": False,
+            "message": f"Finding '{clean_fid}' not found in graph.",
+            "tenant_graph": graph_name or "default",
+        }
+
+    now_ts = utc_now()
+
+    execute_rw_query(
+        """
+        MATCH (f:Entity {id: $id})
+        SET f.status = 'SUPERSEDED',
+            f.superseded_at = $ts,
+            f.superseded_reason = $reason,
+            f.superseded_by = $new_fid
+        """,
+        params={
+            "id": clean_fid,
+            "ts": now_ts,
+            "reason": reason,
+            "new_fid": superseding_finding_id or "",
+        },
+        graph_name=graph_name,
+    )
+
+    if superseding_finding_id.strip():
+        clean_new_fid = validate_identifier(superseding_finding_id, field_name="superseding_finding_id")
+        execute_rw_query(
+            """
+            MATCH (old_f:Entity {id: $old_id})
+            MATCH (new_f:Entity {id: $new_id})
+            MERGE (old_f)-[:SUPERSEDED_BY {observed_at: $ts}]->(new_f)
+            """,
+            params={
+                "old_id": clean_fid,
+                "new_id": clean_new_fid,
+                "ts": now_ts,
+            },
+            graph_name=graph_name,
+        )
+
+    return {
+        "finding_id": clean_fid,
+        "previous_status": rows[0][3],
+        "new_status": "SUPERSEDED",
+        "superseded_at": now_ts,
+        "reason": reason,
+        "superseding_finding_id": superseding_finding_id or None,
+        "message": f"Finding '{clean_fid}' marked SUPERSEDED with audit trail preserved.",
+        "tenant_graph": graph_name or "default",
     }

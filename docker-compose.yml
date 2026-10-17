@@ -1,0 +1,58 @@
+services:
+  # ---------------------------------------------------------------------------
+  # GraphOS AI Agent CLI (Interactive or One-Shot Investigations)
+  # Run: docker compose run --rm agent
+  # Or:  docker compose run --rm agent ask "Why is payments release delayed?"
+  # ---------------------------------------------------------------------------
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: graphos:latest
+    container_name: graphos-agent
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true
+
+  # ---------------------------------------------------------------------------
+  # GraphOS Streamlit Analytics Dashboard
+  # Run: docker compose up dashboard
+  # Access: http://localhost:8501
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: graphos:latest
+    container_name: graphos-dashboard
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8501:8501"
+    entrypoint: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Standalone GraphOS MCP Server
+  # Run: docker compose up mcp-server
+  # ---------------------------------------------------------------------------
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: graphos:latest
+    container_name: graphos-mcp-server
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PYTHONUNBUFFERED=1
+    entrypoint: ["python", "mcp_server/server.py"]
+    restart: unless-stopped

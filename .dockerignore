@@ -1,0 +1,29 @@
+# Git & IDE
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+
+# Python Cache & Virtual Environments
+.venv
+venv
+agent/venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+dist
+build
+*.egg-info
+
+# Local Environment Variables & Secrets
+.env
+.env.local
+*.log
+
+# Documentation scratchpads
+docs/scratch

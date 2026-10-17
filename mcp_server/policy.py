@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from db import execute_ro_query
-from models import PolicyVerdict
+try:
+    from mcp_server.db import execute_ro_query
+    from mcp_server.models import PolicyVerdict
+except ImportError:
+    from db import execute_ro_query
+    from models import PolicyVerdict
 
 COMPLETED_STATUSES = {"complete", "completed", "approved", "passed", "resolved"}
 
@@ -24,7 +28,6 @@ def check_action_policy(
     if not action or not target_id:
         raise ValueError("action and target_id are required")
 
-    # 1. Action: bypass_review
     if action == "bypass_review":
         policy_rows = execute_ro_query(
             """
@@ -56,7 +59,6 @@ def check_action_policy(
             },
         }
 
-    # 2. Action: reassign_review
     if action == "reassign_review":
         assignee_id = str(params.get("assignee_id", "")).strip()
         if not assignee_id:
@@ -169,7 +171,6 @@ def check_action_policy(
             },
         }
 
-    # 3. Action: approve_production_release
     if action == "approve_production_release":
         rows = execute_ro_query(
             """
@@ -231,7 +232,6 @@ def check_action_policy(
             },
         }
 
-    # 4. Action: deprecate_dependency
     if action == "deprecate_dependency":
         rows = execute_ro_query(
             """
@@ -274,7 +274,6 @@ def check_action_policy(
             "evidence": {},
         }
 
-    # Generic policy fallback based on graph relationships
     dyn_rows = execute_ro_query(
         """
         MATCH (target:Entity {id: $target_id})-[:GOVERNED_BY]->(policy:Entity)

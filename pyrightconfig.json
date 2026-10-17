@@ -1,0 +1,6 @@
+{
+  "include": ["agent", "mcp_server", "dashboard", "tests"],
+  "extraPaths": ["mcp_server", "."],
+  "venvPath": ".",
+  "venv": ".venv"
+}

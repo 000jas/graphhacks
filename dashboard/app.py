@@ -8,14 +8,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# Configure paths so dashboard can import from standalone mcp_server
 ROOT_DIR = Path(__file__).resolve().parent.parent
 MCP_SERVER_DIR = ROOT_DIR / "mcp_server"
 
 if str(MCP_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_SERVER_DIR))
 
-# Import MCP tools directly from standalone mcp_server
 from server import (
     analyze_graph_impact,
     check_policy,
@@ -40,7 +38,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom Styling
 st.markdown("""
 <style>
     .metric-card {
@@ -72,7 +69,6 @@ def load_stats():
 
 stats = load_stats()
 
-# Sidebar
 with st.sidebar:
     st.title("🌌 GraphOS")
     st.caption("Evidence-Bound MCP Server Dashboard")
@@ -107,9 +103,6 @@ with st.sidebar:
     st.markdown("---")
     st.caption("FalkorDB Cloud AWS Cluster • MCP v2.3.0")
 
-# ==============================================================================
-# VIEW 1: ENTITY EXPLORER
-# ==============================================================================
 if view == "🔍 Entity Explorer":
     st.header("🔍 Entity Explorer & Search")
     st.markdown("Query the cloud graph for entities, inspect incoming/outgoing edges, and review source-backed properties.")
@@ -167,9 +160,6 @@ if view == "🔍 Entity Explorer":
                     with st.expander("Raw Entity Properties"):
                         st.json(e["properties"])
 
-# ==============================================================================
-# VIEW 2: SHORTEST EVIDENCE PATH
-# ==============================================================================
 elif view == "🔗 Shortest Evidence Path":
     st.header("🔗 Shortest Evidence Path Finder")
     st.markdown("Trace verifiable connection chains across multiple hops between two entities with edge provenance and confidence.")
@@ -195,7 +185,6 @@ elif view == "🔗 Shortest Evidence Path":
             nodes = res["path_nodes"]
             edges = res["path_edges"]
 
-            # Visual chain
             steps = []
             for i in range(len(edges)):
                 u = nodes[i]
@@ -209,9 +198,6 @@ elif view == "🔗 Shortest Evidence Path":
             with st.expander("Detailed Evidence & Timestamps"):
                 st.json(res)
 
-# ==============================================================================
-# VIEW 3: GRAPH ALGORITHMS
-# ==============================================================================
 elif view == "📊 Graph Algorithms":
     st.header("📊 Graph Algorithms & Structural Analysis")
     st.markdown("Run topological centrality, deadlock detection, and community algorithms over FalkorDB Cloud.")
@@ -266,9 +252,6 @@ elif view == "📊 Graph Algorithms":
             for comp in res["components"]:
                 st.write(f"**Cluster Root (`{comp['component_root']}`)** — {comp['size']} entities")
 
-# ==============================================================================
-# VIEW 4: BLAST RADIUS & IMPACT
-# ==============================================================================
 elif view == "💥 Blast Radius & Impact":
     st.header("💥 Blast Radius & Impact Analysis")
     st.markdown("Evaluate downstream consequences, affected services, and critical dependency chains for an entity.")
@@ -298,7 +281,6 @@ elif view == "💥 Blast Radius & Impact":
             col_m2.metric("Total Transitive Impacted", br["total_transitive_impacted_count"])
             col_m3.metric("Critical Assets Impacted", br["critical_assets_impacted"])
 
-            # Categories breakdown
             if imp.get("impact_by_category"):
                 cats = {k: len(v) for k, v in imp["impact_by_category"].items()}
                 cat_df = pd.DataFrame(list(cats.items()), columns=["Asset Category", "Impacted Count"])
@@ -309,9 +291,6 @@ elif view == "💥 Blast Radius & Impact":
                 for c in imp.get("critical_impact_chains", []):
                     st.write(f"**{c['target_entity']['name']}** ({c['hops']} hops): {' ➔ '.join(c['chain'])}")
 
-# ==============================================================================
-# VIEW 5: POLICY & COUNTERFACTUAL SIMULATOR
-# ==============================================================================
 elif view == "🛡️ Policy & Counterfactual Simulator":
     st.header("🛡️ Policy Engine & Counterfactual Planning")
     st.markdown("Dry-run proposed interventions against graph policies without modifying state.")
@@ -365,9 +344,6 @@ elif view == "🛡️ Policy & Counterfactual Simulator":
                 for m in sim["recommended_mitigations"]:
                     st.markdown(f"- 🛡️ {m}")
 
-# ==============================================================================
-# VIEW 6: ACTION LIFECYCLE & EXECUTION
-# ==============================================================================
 elif view == "🚀 Action Lifecycle & Execution":
     st.header("🚀 Action Lifecycle & Controlled Execution")
     st.markdown("Propose an action bound to evidence, verify approval tokens, and execute with immutable audit logs.")
@@ -414,14 +390,10 @@ elif view == "🚀 Action Lifecycle & Execution":
             else:
                 st.error(f"✗ Execution Blocked: {ex.get('message')}")
 
-# ==============================================================================
-# VIEW 7: ORGANIZATIONAL MEMORY
-# ==============================================================================
 elif view == "🧠 Organizational Memory":
     st.header("🧠 Durable Organizational Memory")
     st.markdown("Inspect historical findings and record new verified outcomes linked back to graph entities.")
 
-    # Show existing memory records in graph
     memory_rows = execute_ro_query(
         """
         MATCH (m:Entity {kind: 'MemoryRecord'})
@@ -465,9 +437,6 @@ elif view == "🧠 Organizational Memory":
         rec = json.loads(rec_raw)
         st.success(f"✓ Saved to Memory: `{rec['memory_id']}` (Linked {len(rec['target_entities_linked'])} entities)")
 
-# ==============================================================================
-# VIEW 8: DIRECT MCP TOOL CONSOLE
-# ==============================================================================
 elif view == "⚡ Direct MCP Tool Console":
     st.header("⚡ Direct MCP Tool Console")
     st.markdown("Test raw MCP tool invocations with custom JSON parameters and inspect response payloads.")

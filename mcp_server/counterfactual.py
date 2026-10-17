@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from db import execute_ro_query
-from impact import analyze_graph_impact
-from policy import check_action_policy
+try:
+    from mcp_server.db import execute_ro_query
+    from mcp_server.impact import analyze_graph_impact
+    from mcp_server.policy import check_action_policy
+except ImportError:
+    from db import execute_ro_query
+    from impact import analyze_graph_impact
+    from policy import check_action_policy
 
 
 def simulate_candidate_action(
@@ -170,4 +175,101 @@ def simulate_candidate_action(
             f"Policy check: {'PASSED' if policy_result.get('allowed') else 'FAILED'}. "
             f"{'Safe to propose with mitigations.' if policy_result.get('allowed') else 'Violates policy constraints; cannot proceed without resolution.'}"
         ),
+    }
+
+
+def evaluate_candidate_actions(
+    candidate_actions: list[dict[str, Any]],
+    target_entity_id: str = "",
+    tenant_graph: str = "",
+) -> dict[str, Any]:
+    """
+    Compare multiple candidate actions side-by-side against graph evidence and policy constraints,
+    producing an explainable comparison matrix and rank-ordered recommendation.
+    """
+    if not candidate_actions:
+        raise ValueError("candidate_actions list must contain at least one action specification")
+
+    evaluated: list[dict[str, Any]] = []
+
+    for idx, cand in enumerate(candidate_actions, start=1):
+        action_name = cand.get("action", "").strip()
+        tid = (cand.get("target_id") or target_entity_id).strip()
+        params = cand.get("params") or {}
+
+        if not action_name or not tid:
+            evaluated.append({
+                "candidate_index": idx,
+                "action": action_name or "UNSPECIFIED",
+                "target_id": tid or "UNSPECIFIED",
+                "simulated": False,
+                "policy_allowed": False,
+                "error": "Missing required 'action' or 'target_id'",
+                "ranking_score": 0,
+            })
+            continue
+
+        sim = simulate_candidate_action(action=action_name, target_id=tid, params=params, graph_name=tenant_graph)
+
+        policy_info = sim.get("policy_evaluation", {})
+        allowed = policy_info.get("allowed", False)
+        verdict = policy_info.get("verdict", "UNRESOLVED")
+        risk_level = sim.get("risk_assessment", {}).get("risk_level", "MEDIUM")
+        reversible = sim.get("risk_assessment", {}).get("is_reversible", True)
+        unblocked_count = len(sim.get("projected_unblocked_entities", []))
+
+        rejection_reason = None
+        if not allowed:
+            rejection_reason = policy_info.get("reason") or "Policy check failed."
+            violated = policy_info.get("violated_rules")
+            if violated:
+                rejection_reason += f" Violated: {violated}"
+
+        risk_points = {"LOW": 30, "MEDIUM": 15, "HIGH": 0, "CRITICAL": -50}.get(risk_level, 0)
+        score = (100 if allowed else 0) + risk_points + (15 if reversible else 0) + (10 * unblocked_count)
+
+        evaluated.append({
+            "candidate_index": idx,
+            "action": action_name,
+            "target_id": tid,
+            "target_name": sim.get("target_entity", {}).get("name", tid),
+            "policy_verdict": verdict,
+            "policy_allowed": allowed,
+            "rejection_reason": rejection_reason,
+            "risk_level": risk_level,
+            "is_reversible": reversible,
+            "unblocked_entities_count": unblocked_count,
+            "required_approval_role": "vp_engineering" if not allowed else "engineering_lead",
+            "ranking_score": score,
+            "recommended_mitigations": sim.get("recommended_mitigations", []),
+            "counterfactual_verdict": sim.get("counterfactual_verdict", ""),
+        })
+
+    evaluated.sort(key=lambda c: c["ranking_score"], reverse=True)
+
+    recommended = evaluated[0] if evaluated else None
+    has_viable_option = any(c["policy_allowed"] for c in evaluated)
+
+    return {
+        "total_candidates_evaluated": len(evaluated),
+        "has_viable_allowed_candidate": has_viable_option,
+        "recommended_candidate": (
+            {
+                "action": recommended["action"],
+                "target_id": recommended["target_id"],
+                "target_name": recommended["target_name"],
+                "policy_allowed": recommended["policy_allowed"],
+                "risk_level": recommended["risk_level"],
+                "justification": (
+                    f"Action '{recommended['action']}' is permitted under governance policy, operates at {recommended['risk_level']} risk, "
+                    f"and unblocks {recommended['unblocked_entities_count']} downstream entity(ies)."
+                    if recommended["policy_allowed"]
+                    else f"No candidate actions were permitted by policy. Best fallback '{recommended['action']}' requires leadership exception."
+                ),
+            }
+            if recommended
+            else None
+        ),
+        "comparison_matrix": evaluated,
+        "tenant_graph": tenant_graph or "default",
     }

@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphos"
+version = "0.2.0"
+description = "GraphOS — Evidence-Bound Graph AI Agent (CLI-First Interactive Terminal Agent)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "GraphOS Core Team" }
+]
+keywords = [
+    "graph-database",
+    "falkordb",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "knowledge-graph",
+    "llm",
+    "investigation",
+    "evidence-bound"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Database :: Database Engines/Servers",
+]
+dependencies = [
+    "falkordb>=1.8.0",
+    "mcp[cli]>=2,<3",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "rich>=13.0.0",
+    "prompt-toolkit>=3.0.40",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dashboard = [
+    "pandas>=2.0.0",
+    "plotly>=5.0.0",
+    "streamlit>=1.30.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "anyio>=4.0.0",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0",
+]
+
+[project.scripts]
+graphos = "agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent*", "mcp_server*", "dashboard*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["agent", "mcp_server", "dashboard", "tests"]
+extraPaths = ["mcp_server", "."]
+venvPath = "."
+venv = ".venv"
+

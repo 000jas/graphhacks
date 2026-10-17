@@ -7,7 +7,10 @@ from typing import Any, Optional
 from falkordb import FalkorDB
 from falkordb.graph import Graph
 
-from config import settings
+try:
+    from mcp_server.config import settings
+except ImportError:
+    from config import settings
 
 logger = logging.getLogger("graphos.mcp.db")
 
@@ -42,7 +45,7 @@ def get_db_client() -> FalkorDB:
     try:
         client = FalkorDB(**kwargs)
         client.connection.ping()
-        logger.info(f"Connected to FalkorDB Cloud at {settings.host}:{settings.port} (ssl={settings.ssl})")
+        logger.debug(f"Connected to FalkorDB Cloud at {settings.host}:{settings.port} (ssl={settings.ssl})")
         return client
     except Exception as exc:
         if settings.ssl:
@@ -53,7 +56,7 @@ def get_db_client() -> FalkorDB:
             try:
                 fallback_client = FalkorDB(**kwargs)
                 fallback_client.connection.ping()
-                logger.info("Fallback connection established to FalkorDB Cloud (ssl=False)")
+                logger.debug("Fallback connection established to FalkorDB Cloud (ssl=False)")
                 return fallback_client
             except Exception as fallback_exc:
                 raise GraphError(
@@ -104,9 +107,16 @@ def execute_rw_query(
 def get_graph_stats(graph_name: Optional[str] = None) -> dict[str, Any]:
     """Return summary statistics for the active graph."""
     safe_name = settings.validate_graph_name(graph_name)
-    nodes = execute_ro_query("MATCH (n:Entity) RETURN count(n) AS c", graph_name=safe_name)
+    nodes = execute_ro_query("MATCH (n) RETURN count(n) AS c", graph_name=safe_name)
     edges = execute_ro_query("MATCH ()-[r]->() RETURN count(r) AS c", graph_name=safe_name)
-    kinds = execute_ro_query("MATCH (n:Entity) RETURN DISTINCT n.kind ORDER BY n.kind", graph_name=safe_name)
+    kinds = execute_ro_query(
+        """
+        MATCH (n)
+        RETURN DISTINCT coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node') AS k
+        ORDER BY k
+        """,
+        graph_name=safe_name,
+    )
     rel_types = execute_ro_query("MATCH ()-[r]->() RETURN DISTINCT type(r) ORDER BY type(r)", graph_name=safe_name)
 
     return {
