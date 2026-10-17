@@ -59,12 +59,51 @@ class MockProvider(BaseLLMProvider):
         ) + 1
 
         clean_query = user_query
-        if "INVESTIGATION OBJECTIVE:" in user_query:
+        if "CURRENT USER OBJECTIVE:" in user_query:
+            clean_query = user_query.split("CURRENT USER OBJECTIVE:", 1)[1].split("\n\nInstructions:", 1)[0].strip()
+        elif "INVESTIGATION OBJECTIVE:" in user_query:
             clean_query = user_query.split("INVESTIGATION OBJECTIVE:", 1)[1].split("\n\nPlease inspect", 1)[0].strip()
 
         cq_lower = clean_query.lower()
 
-        if "quantum" in cq_lower:
+        if "audit" in cq_lower:
+            if turn_step == 1:
+                return ProviderResponse(
+                    content="Let me retrieve the entity profile for the specified audit record.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_mock_audit_1",
+                            function_name="get_entity_profile",
+                            arguments={"entity_id": "audit-rec-901"},
+                        )
+                    ],
+                )
+            elif turn_step == 2:
+                return ProviderResponse(
+                    content="The profile shows zero connected relationships. Let me inspect its neighbors to confirm whether it is completely isolated.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_mock_audit_2",
+                            function_name="inspect_entity_neighbors",
+                            arguments={"entity_id": "audit-rec-901", "direction": "both"},
+                        )
+                    ],
+                )
+            else:
+                return ProviderResponse(
+                    content=(
+                        "### Investigation Finding: Isolated Audit Record\n\n"
+                        "Inspection of record `audit-rec-901` confirms it exists in the graph with properties but has **0 incoming and 0 outgoing relationships**.\n\n"
+                        "#### Record Details:\n"
+                        "- Entity Identifier: `audit-rec-901`\n"
+                        "- Isolation Status: Verified Isolated (complete neighbor inspection returned 0 adjacent nodes)\n"
+                        "- Findings: This record is standalone and does not have dependencies or impacts on any software release or payment components."
+                    ),
+                    tool_calls=[],
+                    finish_reason="stop",
+                )
+
+        elif "quantum" in cq_lower:
             if turn_step == 1:
                 return ProviderResponse(
                     content="Let me search the knowledge graph for 'QuantumTeleportation' to verify entity records.",

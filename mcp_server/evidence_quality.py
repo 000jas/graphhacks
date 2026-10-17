@@ -47,14 +47,15 @@ def evaluate_evidence_quality(
     if entity_id:
         clean_id = validate_identifier(entity_id, field_name="entity_id")
         query = f"""
-        MATCH (start:Entity {{id: $eid}})-[*1..{depth}]-(n:Entity)
-        MATCH (n)-[r]->(m:Entity)
+        MATCH (start)-[*1..{depth}]-(n)
+        WHERE (toString(id(start)) = $eid OR start.id = $eid OR start.name = $eid)
+        MATCH (n)-[r]->(m)
         RETURN
-            startNode(r).id AS src_id,
-            startNode(r).name AS src_name,
+            coalesce(startNode(r).id, toString(id(startNode(r)))) AS src_id,
+            coalesce(startNode(r).name, startNode(r).id, toString(id(startNode(r)))) AS src_name,
             type(r) AS rel_type,
-            endNode(r).id AS tgt_id,
-            endNode(r).name AS tgt_name,
+            coalesce(endNode(r).id, toString(id(endNode(r)))) AS tgt_id,
+            coalesce(endNode(r).name, endNode(r).id, toString(id(endNode(r)))) AS tgt_name,
             r.source_record_id AS source_record_id,
             r.observed_at AS observed_at,
             r.confidence AS confidence,
@@ -65,13 +66,13 @@ def evaluate_evidence_quality(
         scope_desc = f"Neighborhood of '{clean_id}' (depth {depth})"
     else:
         query = """
-        MATCH (a:Entity)-[r]->(b:Entity)
+        MATCH (a)-[r]->(b)
         RETURN
-            a.id AS src_id,
-            a.name AS src_name,
+            coalesce(a.id, toString(id(a))) AS src_id,
+            coalesce(a.name, a.id, toString(id(a))) AS src_name,
             type(r) AS rel_type,
-            b.id AS tgt_id,
-            b.name AS tgt_name,
+            coalesce(b.id, toString(id(b))) AS tgt_id,
+            coalesce(b.name, b.id, toString(id(b))) AS tgt_name,
             r.source_record_id AS source_record_id,
             r.observed_at AS observed_at,
             r.confidence AS confidence,
@@ -280,12 +281,13 @@ def inspect_temporal_graph(
     target_graph = settings.validate_graph_name(tenant_graph)
 
     query = """
-    MATCH (n:Entity {id: $eid})-[r]-(other:Entity)
+    MATCH (n)-[r]-(other)
+    WHERE (toString(id(n)) = $eid OR n.id = $eid OR n.name = $eid)
     RETURN
         type(r) AS rel_type,
-        other.id AS other_id,
-        other.name AS other_name,
-        other.kind AS other_kind,
+        coalesce(other.id, toString(id(other))) AS other_id,
+        coalesce(other.name, other.id, toString(id(other))) AS other_name,
+        coalesce(other.kind, labels(other)[0], 'Entity') AS other_kind,
         r.observed_at AS observed_at,
         r.created_at AS created_at,
         r.status AS rel_status,

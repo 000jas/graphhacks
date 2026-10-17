@@ -54,11 +54,11 @@ def search_entities_advanced(
             where_clauses.append(f"n.{prop_k} = ${param_key}")
             params[param_key] = prop_v
 
-    match_clause = "MATCH (n:Entity)"
+    match_clause = "MATCH (n)"
     if connected_to:
         cid = validate_identifier(connected_to, field_name="connected_to")
         rel_type_str = f":{validate_relationship_type(has_relationship)}" if has_relationship else ""
-        match_clause = f"MATCH (target:Entity {{id: $connected_to}})-[{rel_type_str}]-(n:Entity)"
+        match_clause = f"MATCH (target)-[{rel_type_str}]-(n) WHERE (toString(id(target)) = $connected_to OR target.id = $connected_to OR target.name = $connected_to)"
         params["connected_to"] = cid
 
     where_stmt = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
@@ -74,8 +74,8 @@ def search_entities_advanced(
     page_cypher = f"""
     {match_clause}
     {where_stmt}
-    RETURN DISTINCT n.id, n.name, n.kind, n.status, n.source_ref, properties(n)
-    ORDER BY n.name
+    RETURN DISTINCT coalesce(n.id, toString(id(n))), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, labels(n)[0], 'Entity'), n.status, n.source_ref, properties(n)
+    ORDER BY coalesce(n.name, n.id, toString(id(n)))
     SKIP {offset}
     LIMIT {limit}
     """
@@ -130,7 +130,8 @@ def compare_entities(
 
     for eid in clean_ids:
         node_rows = execute_ro_query(
-            "MATCH (n:Entity {id: $id}) RETURN n.id, n.name, n.kind, n.status, properties(n)",
+            "MATCH (n) WHERE (toString(id(n)) = $id OR n.id = $id OR n.name = $id) "
+            "RETURN coalesce(n.id, toString(id(n))), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, labels(n)[0], 'Entity'), n.status, properties(n)",
             params={"id": eid},
             graph_name=target_graph,
         )
@@ -150,7 +151,8 @@ def compare_entities(
 
         if include_relationships:
             out_rows = execute_ro_query(
-                "MATCH (n:Entity {id: $id})-[r]->(target:Entity) RETURN type(r), target.id, target.name, target.kind",
+                "MATCH (n)-[r]->(target) WHERE (toString(id(n)) = $id OR n.id = $id OR n.name = $id) "
+                "RETURN type(r), coalesce(target.id, toString(id(target))), coalesce(target.name, target.id, toString(id(target))), coalesce(target.kind, labels(target)[0], 'Entity')",
                 params={"id": eid},
                 graph_name=target_graph,
             )
@@ -160,7 +162,8 @@ def compare_entities(
             }
 
             in_rows = execute_ro_query(
-                "MATCH (source:Entity)-[r]->(n:Entity {id: $id}) RETURN type(r), source.id, source.name, source.kind",
+                "MATCH (source)-[r]->(n) WHERE (toString(id(n)) = $id OR n.id = $id OR n.name = $id) "
+                "RETURN type(r), coalesce(source.id, toString(id(source))), coalesce(source.name, source.id, toString(id(source))), coalesce(source.kind, labels(source)[0], 'Entity')",
                 params={"id": eid},
                 graph_name=target_graph,
             )
@@ -225,9 +228,9 @@ def investigate_entity_cluster(
     depth = max(1, min(max_depth, 3))
 
     direct_edges_query = """
-    MATCH (a:Entity)-[r]->(b:Entity)
-    WHERE a.id IN $eids AND b.id IN $eids
-    RETURN a.id, a.name, type(r), b.id, b.name, properties(r)
+    MATCH (a)-[r]->(b)
+    WHERE (a.id IN $eids OR toString(id(a)) IN $eids) AND (b.id IN $eids OR toString(id(b)) IN $eids)
+    RETURN coalesce(a.id, toString(id(a))), coalesce(a.name, a.id, toString(id(a))), type(r), coalesce(b.id, toString(id(b))), coalesce(b.name, b.id, toString(id(b))), properties(r)
     """
     direct_rows = execute_ro_query(direct_edges_query, params={"eids": clean_ids}, graph_name=target_graph)
     internal_connections = [
@@ -243,10 +246,10 @@ def investigate_entity_cluster(
     ]
 
     intermediary_query = f"""
-    MATCH (a:Entity)-[r1]-(bridge:Entity)-[r2]-(b:Entity)
-    WHERE a.id IN $eids AND b.id IN $eids AND a.id < b.id
-      AND NOT bridge.id IN $eids
-    RETURN DISTINCT bridge.id, bridge.name, bridge.kind, a.id, b.id, type(r1), type(r2)
+    MATCH (a)-[r1]-(bridge)-[r2]-(b)
+    WHERE (a.id IN $eids OR toString(id(a)) IN $eids) AND (b.id IN $eids OR toString(id(b)) IN $eids) AND id(a) < id(b)
+      AND NOT (bridge.id IN $eids OR toString(id(bridge)) IN $eids)
+    RETURN DISTINCT coalesce(bridge.id, toString(id(bridge))), coalesce(bridge.name, bridge.id, toString(id(bridge))), coalesce(bridge.kind, labels(bridge)[0], 'Entity'), coalesce(a.id, toString(id(a))), coalesce(b.id, toString(id(b))), type(r1), type(r2)
     LIMIT 30
     """
     bridge_rows = execute_ro_query(intermediary_query, params={"eids": clean_ids}, graph_name=target_graph)
@@ -260,9 +263,9 @@ def investigate_entity_cluster(
     ]
 
     blocked_query = """
-    MATCH (cluster_node:Entity)-[:BLOCKED_BY|REQUIRES|GOVERNED_BY*1..2]->(risk:Entity)
-    WHERE cluster_node.id IN $eids
-    RETURN DISTINCT risk.id, risk.name, risk.kind, risk.status, cluster_node.id
+    MATCH (cluster_node)-[r*1..2]->(risk)
+    WHERE (cluster_node.id IN $eids OR toString(id(cluster_node)) IN $eids)
+    RETURN DISTINCT coalesce(risk.id, toString(id(risk))), coalesce(risk.name, risk.id, toString(id(risk))), coalesce(risk.kind, labels(risk)[0], 'Entity'), risk.status, coalesce(cluster_node.id, toString(id(cluster_node)))
     LIMIT 20
     """
     risk_rows = execute_ro_query(blocked_query, params={"eids": clean_ids}, graph_name=target_graph)
@@ -320,8 +323,8 @@ def extract_investigation_subgraph(
         params["rels"] = rel_types
 
     query = f"""
-    MATCH p = (focal:Entity)-[*1..{depth}]-(neighbor:Entity)
-    WHERE focal.id IN $focal_ids {rel_filter}
+    MATCH p = (focal)-[*1..{depth}]-(neighbor)
+    WHERE (focal.id IN $focal_ids OR toString(id(focal)) IN $focal_ids) {rel_filter}
     RETURN p
     LIMIT 80
     """
@@ -333,7 +336,8 @@ def extract_investigation_subgraph(
 
     for fid in clean_focal:
         f_rows = execute_ro_query(
-            "MATCH (n:Entity {id: $id}) RETURN n.id, n.name, n.kind, n.status, properties(n)",
+            "MATCH (n) WHERE (toString(id(n)) = $id OR n.id = $id OR n.name = $id) "
+            "RETURN coalesce(n.id, toString(id(n))), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, labels(n)[0], 'Entity'), n.status, properties(n)",
             params={"id": fid},
             graph_name=target_graph,
         )
@@ -352,14 +356,12 @@ def extract_investigation_subgraph(
         path = row[0]
         node_map = {}
         for n in path.nodes():
-            nid = n.properties.get("id")
-            if not nid:
-                continue
+            nid = n.properties.get("id") or str(n.id)
             node_map[n.id] = nid
             if nid not in nodes_dict and len(nodes_dict) < max_nodes:
                 nodes_dict[nid] = {
                     "id": nid,
-                    "name": n.properties.get("name"),
+                    "name": n.properties.get("name") or nid,
                     "kind": n.properties.get("kind"),
                     "status": n.properties.get("status"),
                     "is_focal": nid in clean_focal,
@@ -411,7 +413,9 @@ def compare_evidence_paths(
     limit = max(1, min(candidate_paths_limit, 8))
 
     query = f"""
-    MATCH p = (s:Entity {{id: $source_id}})-[*1..{depth}]-(t:Entity {{id: $target_id}})
+    MATCH p = (s)-[*1..{depth}]-(t)
+    WHERE (toString(id(s)) = $source_id OR s.id = $source_id OR s.name = $source_id)
+      AND (toString(id(t)) = $target_id OR t.id = $target_id OR t.name = $target_id)
     RETURN p
     ORDER BY length(p)
     LIMIT {limit}
@@ -509,9 +513,9 @@ def batch_get_entities(
     target_graph = settings.validate_graph_name(tenant_graph)
 
     query = """
-    MATCH (n:Entity)
-    WHERE n.id IN $eids
-    RETURN n.id, n.name, n.kind, n.status, n.source_ref, properties(n)
+    MATCH (n)
+    WHERE (n.id IN $eids OR toString(id(n)) IN $eids OR n.name IN $eids)
+    RETURN coalesce(n.id, toString(id(n))), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, labels(n)[0], 'Entity'), n.status, n.source_ref, properties(n)
     """
     rows = execute_ro_query(query, params={"eids": clean_ids}, graph_name=target_graph)
 
@@ -568,9 +572,9 @@ def generate_investigation_summary(
     ]
 
     connections_query = """
-    MATCH (a:Entity)-[r]->(b:Entity)
-    WHERE a.id IN $eids AND b.id IN $eids
-    RETURN a.id, a.name, type(r), b.id, b.name, r.source_record_id
+    MATCH (a)-[r]->(b)
+    WHERE (a.id IN $eids OR toString(id(a)) IN $eids) AND (b.id IN $eids OR toString(id(b)) IN $eids)
+    RETURN coalesce(a.id, toString(id(a))), coalesce(a.name, a.id, toString(id(a))), type(r), coalesce(b.id, toString(id(b))), coalesce(b.name, b.id, toString(id(b))), r.source_record_id
     """
     conn_rows = execute_ro_query(connections_query, params={"eids": clean_ids}, graph_name=target_graph)
     derived_connections = [

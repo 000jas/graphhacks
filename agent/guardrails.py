@@ -12,6 +12,7 @@ logger = logging.getLogger("graphos.agent.guardrails")
 READ_ONLY_ALLOWED_TOOLS = {
     "search_connected_entities",
     "get_entity_profile",
+    "inspect_entity_neighbors",
     "traverse_relationships",
     "find_shortest_evidence_path",
     "run_graph_algorithm",
@@ -135,6 +136,11 @@ class GuardrailManager:
                     return False, f"VALIDATION ERROR: Parameter 'limit' ({limit_val}) must be between 1 and 50."
             except (ValueError, TypeError):
                 return False, "VALIDATION ERROR: Parameter 'limit' must be an integer."
+
+        if "direction" in args:
+            dir_val = str(args["direction"]).strip().lower()
+            if dir_val not in ("both", "outgoing", "incoming"):
+                return False, f"VALIDATION ERROR: Parameter 'direction' ('{dir_val}') must be 'both', 'outgoing', or 'incoming'."
 
         if fn_name == "run_read_only_cypher_query":
             raw_q = str(args.get("query", ""))

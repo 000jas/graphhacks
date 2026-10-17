@@ -25,37 +25,32 @@ from agent.schema_context import GraphProfile, SchemaContextManager
 
 logger = logging.getLogger("graphos.agent.engine")
 
-INVESTIGATOR_SYSTEM_PROMPT = """You are the GraphOS Investigator, a direct, evidence-bound knowledge graph intelligence assistant.
-Your goal is to inspect connected data in FalkorDB via MCP tools, uncover the root cause, and present a clean, concise, human-friendly explanation with interactive next options.
+INVESTIGATOR_SYSTEM_PROMPT = """You are GraphOS, a domain-independent, evidence-bound knowledge graph intelligence assistant.
+You explore connected data in FalkorDB through read-only MCP tools to answer questions, analyze dependencies, evaluate impact, and verify facts.
 
-### Operational Guidelines:
-1. Grounding: Every finding must be based on actual graph data retrieved via tools. Do not invent or assume entities or relationships.
-2. Direct Investigation Strategy:
-   - Find focal entities using `search_connected_entities` or `search_entities_advanced`.
-   - Inspect connections using `traverse_relationships` (following relationship types like BLOCKED_BY, REQUIRES, ASSIGNED_TO, DEPLOYS, HAS_RELEASE) or `get_entity_profile`.
-   - Continue traversing along the dependency chain until you uncover the blocker, bottleneck, or root cause.
-3. Keep Output Clean, Direct, and Simple:
-   - Avoid generic boilerplate, academic intros, or giant multi-column tables.
-   - Deliver clear, actionable reasoning in plain English that anyone can read in 15 seconds.
+### Core Operating Principles:
+1. Grounding & Strict Evidence:
+   - Every claim, entity, relationship, and metric in your response must be derived directly from actual tool responses.
+   - Never assume, invent, or extrapolate entities, relationships, or labels.
+   - If a requested entity does not exist or has no connections in the graph, state that fact clearly and objectively.
 
-### Output Structure:
-When your investigation is complete, present your findings using this clean structure:
+2. Schema-Driven Exploration:
+   - Use the runtime graph schema provided in the context to guide your tool selection and queries.
+   - Do not assume specific labels (e.g. Release, Task, Account, Component) or properties (e.g. name, id) unless they exist in the discovered schema.
+   - Always respect the specific scope of the user's objective. Do not drift into unrelated entities or default to software release / root cause narratives unless the objective asks for that.
 
-### 🎯 Root Cause Summary
-(1-2 clear sentences directly answering why the issue occurred, naming the specific blocker or reason.)
+3. Investigation Strategy:
+   - Identify focal entities using `search_connected_entities`, `search_entities_advanced`, or `get_entity_profile`.
+   - Inspect local connectivity and relationship types using `inspect_entity_neighbors` or `get_entity_profile`.
+   - Trace multi-hop connections with `traverse_relationships` or `find_shortest_evidence_path` when path evidence is needed.
+   - Use specialized graph algorithms (e.g. impact analysis, community detection, PageRank) only when the objective calls for topological or structural analysis.
+   - Stop as soon as the user's question is answered or a genuine graph limitation is reached.
 
-### 🔗 Chain of Evidence
-(A clear, visual step-by-step trace showing how entities connect from the problem to the root cause, using arrows):
-`[Focal Entity]` ➔ `[Relationship]` ➔ `[Intermediate Node / Blocker]` ➔ `[Root Issue / Assigned Owner]`
-
-### 💡 Key Contributing Facts
-- 2-3 short bullet points highlighting the specific facts (e.g. status, assigned owner, availability, leave/incident event).
-
-### ⚡ Suggested Next Actions
-Present 2-3 clear, concrete next options the user can take:
-[1] <Concrete action 1, e.g. reassign task or check alternative reviewer>
-[2] <Concrete action 2, e.g. simulate bypass or assess downstream impact>
-[3] <Concrete action 3, e.g. query decision memory or audit logs>
+4. Output Delivery:
+   - Deliver clear, direct answers tailored to the objective.
+   - Summarize the verified facts and evidence retrieved.
+   - Highlight any genuine data gaps, limitations, or unverified claims.
+   - When appropriate, suggest relevant, concrete next investigative steps based on discovered graph concepts.
 """
 
 
@@ -156,16 +151,36 @@ class GraphOSInvestigator:
             ]
 
             if conversation_context:
+                messages.append(
+                    ChatMessage(
+                        role="system",
+                        content=(
+                            "--- PRIOR CONVERSATION HISTORY (Context Only) ---\n"
+                            "Use this history only to resolve referential context or direct follow-up questions. "
+                            "Do NOT allow previous investigation topics, entities, hypotheses, or domains to contaminate "
+                            "or override the current objective below."
+                        ),
+                    )
+                )
                 for ctx_msg in conversation_context:
                     messages.append(ctx_msg)
+                messages.append(
+                    ChatMessage(
+                        role="system",
+                        content="--- END OF PRIOR CONVERSATION HISTORY ---",
+                    )
+                )
 
             messages.append(
                 ChatMessage(
                     role="user",
                     content=(
-                        f"INVESTIGATION OBJECTIVE:\n{objective}\n\n"
-                        "Please inspect the connected knowledge graph using your available tools. "
-                        "Discover the relevant entities, trace their dependencies, and explain the root cause with verified evidence."
+                        f"CURRENT USER OBJECTIVE:\n{objective}\n\n"
+                        "Instructions:\n"
+                        "1. Stay strictly within the scope requested by the user. Do not expand into unrelated domains or labels.\n"
+                        "2. Formulate a targeted plan: query relevant entities, inspect relationships or neighbors only when necessary for this task.\n"
+                        "3. Base your final conclusions strictly on verified data retrieved from the tools. If a record has no relationships, report it as isolated.\n"
+                        "4. When the information needed to answer the objective has been gathered, conclude with a clear, factual answer."
                     ),
                 )
             )
@@ -174,10 +189,20 @@ class GraphOSInvestigator:
             total_tool_calls_executed = 0
             final_answer = ""
             unresolved_questions: list[str] = []
+            deadline = start_time + (getattr(self.settings, "request_timeout_seconds", 120.0) or 120.0)
+            last_call_signature: Optional[str] = None
+            consecutive_duplicate_count = 0
 
             for iteration in range(1, self.settings.max_iterations + 1):
                 step_start = time.time()
                 logger.debug(f"Investigation Iteration {iteration}/{self.settings.max_iterations}")
+
+                if time.time() >= deadline:
+                    timeout_msg = f"Investigation exceeded configured deadline ({self.settings.request_timeout_seconds}s). Concluding with partial results."
+                    logger.warning(timeout_msg)
+                    _emit("limit_reached", iteration, timeout_msg)
+                    unresolved_questions.append(timeout_msg)
+                    break
 
                 if total_tool_calls_executed >= self.settings.max_tool_calls:
                     limit_msg = f"Reached maximum tool call budget ({self.settings.max_tool_calls}). Concluding investigation."
@@ -223,6 +248,12 @@ class GraphOSInvestigator:
                 )
 
                 for tc in requested_tool_calls:
+                    if time.time() >= deadline:
+                        timeout_msg = f"Investigation exceeded deadline ({self.settings.request_timeout_seconds}s) during tool execution."
+                        _emit("limit_reached", iteration, timeout_msg)
+                        unresolved_questions.append(timeout_msg)
+                        break
+
                     total_tool_calls_executed += 1
                     fn_name = tc.function_name or ""
                     if "<|" in fn_name:
@@ -231,18 +262,37 @@ class GraphOSInvestigator:
                         tc.function_name = fn_name
                     args = tc.arguments or {}
 
+                    call_sig = f"{fn_name}:{json.dumps(args, sort_keys=True)}"
+                    if call_sig == last_call_signature:
+                        consecutive_duplicate_count += 1
+                    else:
+                        consecutive_duplicate_count = 0
+                    last_call_signature = call_sig
+
                     logger.info(f"Tool call #{total_tool_calls_executed}: {fn_name}({args})")
                     _emit("tool_call", iteration, f"Calling tool '{fn_name}'", {"tool": fn_name, "arguments": args})
 
-                    is_valid, validation_error = self.guardrails.validate_tool_call(tc)
-                    if not is_valid:
-                        tool_output = json.dumps({"guardrail_rejection": validation_error})
-                        _emit("guardrail_blocked", iteration, f"Guardrail blocked '{fn_name}': {validation_error}", {"tool": fn_name, "reason": validation_error})
+                    # Suppress redundant schema discovery if graph profile is already cached and valid
+                    if fn_name == "discover_graph_schema" and graph_profile.discovery_status == "success" and not args.get("force_refresh"):
+                        tool_output = json.dumps({
+                            "status": "cached",
+                            "message": "Graph schema already discovered and present in your active system context. Please query specific entities or relationships.",
+                            "summary": graph_profile.to_summary_dict(),
+                        })
+                    elif consecutive_duplicate_count >= 2:
+                        tool_output = json.dumps({
+                            "status": "duplicate_call_warning",
+                            "message": f"Tool '{fn_name}' called with identical arguments {consecutive_duplicate_count + 1} times consecutively. Synthesize gathered evidence or select a different entity/tool.",
+                        })
                     else:
-                        tool_output = await self.mcp_client.call_tool(fn_name, args)
-
-                        evidence.ingest_tool_output(fn_name, args, tool_output)
-                        _emit("tool_result", iteration, f"Retrieved data from '{fn_name}' ({len(tool_output)} bytes)", {"tool": fn_name, "output_length": len(tool_output)})
+                        is_valid, validation_error = self.guardrails.validate_tool_call(tc)
+                        if not is_valid:
+                            tool_output = json.dumps({"guardrail_rejection": validation_error})
+                            _emit("guardrail_blocked", iteration, f"Guardrail blocked '{fn_name}': {validation_error}", {"tool": fn_name, "reason": validation_error})
+                        else:
+                            tool_output = await self.mcp_client.call_tool(fn_name, args)
+                            evidence.ingest_tool_output(fn_name, args, tool_output)
+                            _emit("tool_result", iteration, f"Retrieved data from '{fn_name}' ({len(tool_output)} bytes)", {"tool": fn_name, "output_length": len(tool_output)})
 
                     safe_output = self.guardrails.wrap_untrusted_content(tool_output)
 
@@ -273,22 +323,26 @@ class GraphOSInvestigator:
                 if on_step_callback:
                     on_step_callback(step)
 
+                if time.time() >= deadline or total_tool_calls_executed >= self.settings.max_tool_calls:
+                    break
+
             if not final_answer:
-                logger.info("Synthesizing final answer from gathered evidence following iteration limit.")
-                _emit("plan", len(steps), "Synthesizing final evidence summary following iteration limit...")
+                logger.info("Synthesizing final answer from gathered evidence.")
+                _emit("plan", len(steps), "Synthesizing final evidence summary...")
                 messages.append(
                     ChatMessage(
                         role="user",
                         content=(
-                            "Please provide your final answer now based on the evidence gathered so far. "
-                            "State the root cause clearly, explain the chain of evidence connecting the problem to the cause, "
-                            "and provide 2-3 suggested next actions."
+                            f"Please provide your final answer now for the objective: '{objective}'.\n"
+                            "Synthesize the verified evidence gathered from the graph tools. "
+                            "State the direct answer to the user's question, cite the specific entities and properties retrieved, "
+                            "and explicitly note any isolated entities or limitations encountered. Do not speculate beyond verified evidence."
                         ),
                     )
                 )
                 final_resp = await self.provider.generate_response(messages=messages, tools=[])
                 final_answer = final_resp.content or "Investigation concluded."
-                if "iteration limit" not in " ".join(unresolved_questions):
+                if not any("limit" in q.lower() or "timeout" in q.lower() or "budget" in q.lower() or "deadline" in q.lower() for q in unresolved_questions):
                     unresolved_questions.append("Exhausted configured iteration budget before completing all paths.")
 
             duration = round(time.time() - start_time, 2)

@@ -39,8 +39,8 @@ RUN pip install --no-cache-dir -e . && chmod +x /app/graphos
 # Switch to non-root user
 USER graphos
 
-# Expose default dashboard port
-EXPOSE 8501
+# Expose API and dashboard ports
+EXPOSE 8000 8501
 
 # Default entrypoint: GraphOS CLI
 ENTRYPOINT ["python", "-m", "agent"]

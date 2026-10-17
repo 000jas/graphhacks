@@ -395,3 +395,262 @@ def test_schema_profile_cache_refresh() -> None:
 
     mgr.invalidate("graph_a")
     assert mgr._cache.get("graph_a") is None
+
+
+def test_generic_neighbor_discovery_isolated_node() -> None:
+    """Verify generic inspect_entity_neighbors correctly tracks isolated nodes without assumptions."""
+    from agent.evidence import EvidenceCollector
+
+    collector = EvidenceCollector()
+    mock_tool_output = json.dumps({
+        "entity_id": "audit-rec-901",
+        "entity_name": "Audit Log 901",
+        "direction": "both",
+        "is_isolated": True,
+        "total_neighbors": 0,
+        "adjacent_relationships": [],
+        "adjacent_nodes": [],
+        "relationship_exploration_status": "complete",
+    })
+
+    collector.ingest_tool_output(
+        "inspect_entity_neighbors",
+        {"entity_id": "audit-rec-901", "direction": "both"},
+        mock_tool_output,
+    )
+
+    summary = collector.generate_summary()
+    assert summary["unique_entities_count"] == 1
+    assert "audit-rec-901" in summary["entities"]
+    entity_rec = summary["entities"]["audit-rec-901"]
+    assert entity_rec.get("is_isolated") is True
+    assert entity_rec.get("relationship_contract") == "complete_isolated"
+    assert summary["total_relationships_count"] == 0
+
+
+def test_focused_investigation_scope_audit_record() -> None:
+    """Verify focused investigation stays within requested scope and does not drift into payments release."""
+    async def _run() -> None:
+        settings = AgentSettings(llm_provider="mock", max_iterations=4)
+
+        mock_mcp = AsyncMock()
+        mock_mcp.session = MagicMock()
+        mock_mcp.discover_tools.return_value = [
+            ToolDefinition("discover_graph_schema", "Discover", {}),
+            ToolDefinition("get_entity_profile", "Get profile", {}),
+            ToolDefinition("inspect_entity_neighbors", "Inspect neighbors", {}),
+        ]
+
+        async def _call_tool(tool_name: str, args: dict) -> str:
+            if tool_name == "discover_graph_schema":
+                return json.dumps({
+                    "tenant_graph": "graphos_live",
+                    "inferred_domain": "Live Enterprise System",
+                    "structural_metrics": {"total_nodes": 50, "total_edges": 100, "graph_density": 0.04, "average_degree": 4.0},
+                    "node_kinds": [{"kind": "AuditRecord", "count": 5}],
+                    "relationship_types": [],
+                    "property_catalog": {"AuditRecord": [{"property_name": "action", "inferred_types": ["str"]}]},
+                    "schema_anomalies": [],
+                })
+            elif tool_name == "get_entity_profile":
+                return json.dumps({
+                    "found": True,
+                    "id": "audit-rec-901",
+                    "name": "Audit Record #901",
+                    "kind": "AuditRecord",
+                    "is_isolated": True,
+                    "total_connected_relationships": 0,
+                    "relationship_exploration_status": "complete",
+                    "properties": {"action": "ACCESS_LOG", "target_id": "sec-vault"},
+                })
+            elif tool_name == "inspect_entity_neighbors":
+                return json.dumps({
+                    "entity_id": "audit-rec-901",
+                    "direction": "both",
+                    "is_isolated": True,
+                    "total_neighbors": 0,
+                    "adjacent_relationships": [],
+                    "adjacent_nodes": [],
+                    "relationship_exploration_status": "complete",
+                })
+            return "{}"
+
+        mock_mcp.call_tool.side_effect = _call_tool
+
+        agent = GraphOSInvestigator(settings=settings, provider=MockProvider(), mcp_client=mock_mcp)
+        result = await agent.investigate("Inspect audit record audit-rec-901 and verify if it is connected.")
+
+        assert result.success is True
+        assert "audit-rec-901" in result.final_answer
+        assert "isolated" in result.final_answer.lower()
+        # Verify no drift into Payments Release or PR-482
+        assert "payments" not in result.final_answer.lower()
+        assert "pr-482" not in result.final_answer.lower()
+        assert "liam patel" not in result.final_answer.lower()
+
+    asyncio.run(_run())
+
+
+def test_context_contamination_prevention() -> None:
+    """Verify that prior conversation context about another domain does not override current task."""
+    async def _run() -> None:
+        settings = AgentSettings(llm_provider="mock", max_iterations=4)
+
+        mock_mcp = AsyncMock()
+        mock_mcp.session = MagicMock()
+        mock_mcp.discover_tools.return_value = [
+            ToolDefinition("discover_graph_schema", "Discover", {}),
+            ToolDefinition("get_entity_profile", "Get profile", {}),
+            ToolDefinition("inspect_entity_neighbors", "Inspect neighbors", {}),
+        ]
+
+        async def _call_tool(tool_name: str, args: dict) -> str:
+            if tool_name == "discover_graph_schema":
+                return json.dumps({
+                    "tenant_graph": "graphos_live",
+                    "inferred_domain": "Live Enterprise System",
+                    "structural_metrics": {"total_nodes": 50, "total_edges": 100, "graph_density": 0.04, "average_degree": 4.0},
+                    "node_kinds": [{"kind": "AuditRecord", "count": 5}],
+                    "relationship_types": [],
+                    "property_catalog": {},
+                    "schema_anomalies": [],
+                })
+            elif tool_name == "get_entity_profile":
+                return json.dumps({
+                    "found": True,
+                    "id": "audit-rec-901",
+                    "name": "Audit Record 901",
+                    "kind": "AuditRecord",
+                    "is_isolated": True,
+                    "total_connected_relationships": 0,
+                    "relationship_exploration_status": "complete",
+                    "properties": {"action": "ACCESS_LOG"},
+                })
+            elif tool_name == "inspect_entity_neighbors":
+                return json.dumps({
+                    "entity_id": "audit-rec-901",
+                    "is_isolated": True,
+                    "total_neighbors": 0,
+                    "adjacent_relationships": [],
+                    "adjacent_nodes": [],
+                    "relationship_exploration_status": "complete",
+                })
+            return "{}"
+
+        mock_mcp.call_tool.side_effect = _call_tool
+
+        prior_context = [
+            ChatMessage(role="user", content="Why is release-payments-2026-10 delayed?"),
+            ChatMessage(role="assistant", content="The payments release is delayed due to PR 482 and Liam Patel being on leave."),
+        ]
+
+        agent = GraphOSInvestigator(settings=settings, provider=MockProvider(), mcp_client=mock_mcp)
+        result = await agent.investigate(
+            "Inspect audit record audit-rec-901 and check whether it has any connections.",
+            conversation_context=prior_context,
+        )
+
+        assert result.success is True
+        assert "audit-rec-901" in result.final_answer
+        # Ensure the final answer remained focused on audit-rec-901 and did not adopt the payments release hypothesis
+        assert "payments" not in result.final_answer.lower()
+        assert "liam" not in result.final_answer.lower()
+
+    asyncio.run(_run())
+
+
+def test_evidence_registry_reconciliation_and_deduplication() -> None:
+    """Verify that evidence registry deduplicates correctly across heterogeneous properties without assumptions."""
+    from agent.evidence import EvidenceCollector
+
+    collector = EvidenceCollector()
+
+    # Ingest search output containing duplicate nodes with different property formats
+    search_payload = json.dumps({
+        "count": 3,
+        "entities": [
+            {"id": "node-101", "name": "Node Alpha", "kind": "Server", "status": "active"},
+            {"id": "node-101", "name": "Node Alpha", "kind": "Server", "status": "active"},  # Duplicate
+            {"code": "NODE-202", "title": "Node Beta", "type": "Database"},  # Heterogeneous keys
+        ]
+    })
+    collector.ingest_tool_output("search_connected_entities", {"query": "Node"}, search_payload)
+
+    summary = collector.generate_summary()
+    assert summary["unique_entities_count"] == 2
+    assert summary["duplicate_records_detected"] == 1
+    assert "node-101" in summary["entities"]
+    assert "NODE-202" in summary["entities"]
+
+    # Ingest profile for NODE-202
+    profile_payload = json.dumps({
+        "found": True,
+        "code": "NODE-202",
+        "title": "Node Beta",
+        "kind": "Database",
+        "relationships": [
+            {"type": "CONNECTED_TO", "target_id": "node-101", "target_name": "Node Alpha"}
+        ]
+    })
+    collector.ingest_tool_output("get_entity_profile", {"entity_id": "NODE-202"}, profile_payload)
+
+    summary2 = collector.generate_summary()
+    assert summary2["unique_entities_count"] == 2
+    assert summary2["total_relationships_count"] == 1
+
+
+def test_investigation_timeout_deadline_enforcement() -> None:
+    """Verify that an investigation exceeding its timeout deadline halts gracefully and returns partial results."""
+    async def _run() -> None:
+        # Configure tight timeout of 0.05 seconds
+        settings = AgentSettings(llm_provider="mock", max_iterations=10, request_timeout_seconds=0.05)
+
+        mock_mcp = AsyncMock()
+        mock_mcp.session = MagicMock()
+        mock_mcp.discover_tools.return_value = [
+            ToolDefinition("discover_graph_schema", "Discover", {}),
+            ToolDefinition("search_connected_entities", "Search", {}),
+        ]
+
+        async def _slow_tool_call(tool_name: str, args: dict) -> str:
+            await asyncio.sleep(0.08)  # Exceeds 0.05s deadline
+            return json.dumps({"count": 1, "entities": [{"id": "slow-node"}]})
+
+        mock_mcp.call_tool.side_effect = _slow_tool_call
+
+        agent = GraphOSInvestigator(settings=settings, provider=MockProvider(), mcp_client=mock_mcp)
+        result = await agent.investigate("Investigate slow network nodes.")
+
+        assert result.success is True
+        assert any("deadline" in q.lower() or "timeout" in q.lower() for q in result.unresolved_questions)
+
+    asyncio.run(_run())
+
+
+def test_mcp_failure_and_unsupported_capability_resilience() -> None:
+    """Verify that MCP tool failures and unknown tool calls are handled without unhandled crashes."""
+    async def _run() -> None:
+        settings = AgentSettings(llm_provider="mock", max_iterations=3)
+
+        mock_mcp = AsyncMock()
+        mock_mcp.session = MagicMock()
+        mock_mcp.discover_tools.return_value = [
+            ToolDefinition("discover_graph_schema", "Discover", {}),
+            ToolDefinition("search_connected_entities", "Search", {}),
+        ]
+
+        async def _failing_call(tool_name: str, args: dict) -> str:
+            if tool_name == "discover_graph_schema":
+                return json.dumps({"error": "Graph engine temporarily unavailable", "code": 503})
+            return json.dumps({"error": "Unknown procedure error"})
+
+        mock_mcp.call_tool.side_effect = _failing_call
+
+        agent = GraphOSInvestigator(settings=settings, provider=MockProvider(), mcp_client=mock_mcp)
+        result = await agent.investigate("Search for failing service.")
+
+        assert result.success is True
+        assert result.final_answer != ""
+
+    asyncio.run(_run())
+

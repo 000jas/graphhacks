@@ -31,6 +31,7 @@ class GraphProfile:
     anomalies: list[dict[str, Any]] = field(default_factory=list)
     capabilities: dict[str, str] = field(default_factory=dict)
     limitations: list[str] = field(default_factory=list)
+    discovery_status: str = "success"  # "success", "partial", "unsupported", "failed", "empty"
     discovered_at: float = field(default_factory=time.time)
 
     def is_stale(self, ttl_seconds: float = 300.0) -> bool:
@@ -44,10 +45,16 @@ class GraphProfile:
         """
         lines = [
             "### Runtime Discovered Graph Schema & Characteristics:",
-            f"- Connected Graph Target: `{self.graph_identity}`",
+            f"- Connected Graph Target: `{self.graph_identity}` (Discovery status: {self.discovery_status})",
             f"- Observed Topology: {self.total_nodes} nodes, {self.total_edges} relationships (density: {self.density}, avg degree: {self.average_degree})",
-            f"- Structural Domain Profile: {self.inferred_domain}",
+            f"- Inferred Domain Profile: {self.inferred_domain}",
         ]
+
+        if self.total_nodes == 0:
+            lines.append("- Note: The active graph is currently empty (0 nodes, 0 relationships).")
+            if self.limitations:
+                lines.append("- Recorded Limitations:\n  * " + "\n  * ".join(self.limitations))
+            return "\n".join(lines)
 
         if self.node_kinds:
             kind_strs = [f"{k['kind']} ({k.get('count', 0)})" for k in self.node_kinds[:12]]
@@ -74,8 +81,8 @@ class GraphProfile:
             lines.append("- Known Graph Limitations:\n  * " + "\n  * ".join(self.limitations))
 
         lines.append(
-            "\nNote: All investigation must strictly use the discovered labels, types, and properties above. "
-            "Never assume entities or relationships that do not exist in this graph."
+            "\nNote: All graph exploration must strictly use the discovered labels, types, and properties above. "
+            "Never assume entities, labels, or relationships that do not exist in this graph."
         )
         return "\n".join(lines)
 
@@ -157,14 +164,22 @@ class SchemaContextManager:
                 average_degree=0.0,
                 limitations=[f"Automated schema discovery failed: {exc}"],
                 capabilities={"schema_discovery": "failed"},
+                discovery_status="failed",
             )
 
         metrics = data.get("structural_metrics", {})
+        total_nodes = metrics.get("total_nodes", 0)
+        total_edges = metrics.get("total_edges", 0)
+        status = "empty" if total_nodes == 0 else "success"
+        if data.get("schema_anomalies"):
+            if any(a.get("severity") == "CRITICAL" for a in data.get("schema_anomalies", [])):
+                status = "partial"
+
         profile = GraphProfile(
             graph_identity=data.get("tenant_graph", tenant_graph or "default"),
             inferred_domain=data.get("inferred_domain", "Connected Knowledge Graph"),
-            total_nodes=metrics.get("total_nodes", 0),
-            total_edges=metrics.get("total_edges", 0),
+            total_nodes=total_nodes,
+            total_edges=total_edges,
             density=metrics.get("graph_density", 0.0),
             average_degree=metrics.get("average_degree", 0.0),
             node_kinds=data.get("node_kinds", []),
@@ -183,6 +198,7 @@ class SchemaContextManager:
                 for a in data.get("schema_anomalies", [])
                 if a.get("severity") in ("HIGH", "CRITICAL")
             ],
+            discovery_status=status,
             discovered_at=time.time(),
         )
         logger.info(

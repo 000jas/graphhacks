@@ -1,0 +1,161 @@
+@import "tailwindcss";
+
+:root {
+  --navy-950: #040e21;
+  --navy-900: #071738;
+  --navy-850: #0a214d;
+  --navy-800: #0e2d66;
+
+  --blue-600: #1678ef;
+  --blue-500: #268cf5;
+  --blue-400: #4ba3fb;
+  --blue-300: #82c4ff;
+  --cyan-400: #38bdf8;
+  --cyan-300: #7dd3fc;
+
+  --ice-100: #eff7ff;
+  --ice-50: #f6faff;
+  --white: #ffffff;
+
+  --text-primary: #071e42;
+  --text-secondary: #244677;
+  --text-muted: #5a759c;
+
+  --border-subtle: rgba(67, 112, 170, 0.18);
+  --border-card: rgba(38, 140, 245, 0.22);
+  --glass-surface: rgba(255, 255, 255, 0.88);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--text-primary);
+  background-color: var(--ice-50);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Cosmic, deep-navy & electric-blue hero container inspired by Luminal reference */
+.hero-gradient-container {
+  background-color: #040e21;
+  background-image: 
+    radial-gradient(ellipse 120% 80% at 50% 25%, #1877f2 0%, #0c3674 35%, #071e44 65%, #040e21 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Starfield / constellation texture overlay */
+.star-texture-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: 
+    radial-gradient(1px 1px at 30px 40px, rgba(255, 255, 255, 0.85), transparent),
+    radial-gradient(1.5px 1.5px at 110px 160px, rgba(130, 196, 255, 0.95), transparent),
+    radial-gradient(1px 1px at 220px 80px, rgba(255, 255, 255, 0.75), transparent),
+    radial-gradient(2px 2px at 350px 200px, rgba(56, 189, 248, 0.9), transparent),
+    radial-gradient(1.5px 1.5px at 490px 100px, rgba(255, 255, 255, 0.8), transparent),
+    radial-gradient(1px 1px at 610px 260px, rgba(130, 196, 255, 0.85), transparent),
+    radial-gradient(2px 2px at 740px 140px, rgba(255, 255, 255, 0.9), transparent),
+    radial-gradient(1px 1px at 870px 60px, rgba(130, 196, 255, 0.75), transparent),
+    radial-gradient(1.5px 1.5px at 990px 220px, rgba(56, 189, 248, 0.85), transparent),
+    radial-gradient(1.2px 1.2px at 1120px 130px, rgba(255, 255, 255, 0.8), transparent);
+  background-size: 1100px 360px;
+  background-repeat: repeat;
+  opacity: 0.7;
+}
+
+/* Luminous atmospheric celestial glow */
+.ambient-glow {
+  background: radial-gradient(circle at 50% 40%, rgba(38, 140, 245, 0.45) 0%, rgba(0, 210, 255, 0.25) 30%, rgba(10, 33, 77, 0) 70%);
+}
+
+/* Frosted glass prompt composer container */
+.frosted-glass-composer {
+  background: rgba(8, 28, 64, 0.76);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 
+    0 25px 60px -10px rgba(0, 8, 30, 0.75),
+    0 0 40px rgba(22, 120, 239, 0.28),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.frosted-glass-composer:hover,
+.frosted-glass-composer:focus-within {
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 
+    0 30px 70px -10px rgba(0, 8, 30, 0.85),
+    0 0 55px rgba(56, 189, 248, 0.35),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* Floating dark capsules with high contrast */
+.floating-capsule {
+  background: rgba(6, 22, 52, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+/* White glass card for panels and components */
+.white-glass-card {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(67, 112, 170, 0.16);
+  box-shadow: 0 10px 30px rgba(7, 30, 66, 0.05);
+}
+
+.white-glass-card:hover {
+  border-color: rgba(22, 120, 239, 0.35);
+  box-shadow: 0 20px 40px -15px rgba(10, 38, 82, 0.12);
+}
+
+/* Rounded pills */
+.pill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(67, 112, 170, 0.25);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(67, 112, 170, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

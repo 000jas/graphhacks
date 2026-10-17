@@ -42,3 +42,8 @@ agent/venv
 .vscode/
 *.swp
 *.swo
+
+# Frontend build & dependencies
+frontend/node_modules/
+frontend/.next/
+frontend/out/

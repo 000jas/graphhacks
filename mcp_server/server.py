@@ -143,27 +143,17 @@ mcp = MCPServer(
     ),
 )
 
-ALLOWED_RELATIONSHIPS = {
-    "HAS_RELEASE", "HAS_TEAM", "DEPLOYS", "TARGETS_ENV",
-    "BLOCKED_BY", "REQUIRES", "GOVERNED_BY", "IMPLEMENTED_IN",
-    "DEPENDS_ON", "DEPLOYED_TO", "HAS_PULL_REQUEST", "CONTAINS",
-    "MODIFIES", "INTRODUCES_DEPENDENCY", "AUTHORED_BY",
-    "ASSOCIATED_WITH", "CHECKED_BY", "DOCUMENTED_IN",
-    "ASSIGNED_TO", "OWNED_BY", "HAS_EVENT", "TRIGGERS",
-    "EXPLAINS", "APPLIES_TO", "HAS_MEMBER", "PART_OF",
-    "IMPACTS", "TRACED_TO", "RUNS_ON", "VALIDATES", "USED_BY",
-    "COVERS", "SUPERSEDED_BY",
-}
-
-
 def entity_row(row: list[Any]) -> dict[str, Any]:
-    return {
+    res = {
         "id": row[0],
         "name": row[1],
         "kind": row[2],
         "status": row[3],
         "source_ref": row[4],
     }
+    if len(row) > 5 and isinstance(row[5], dict):
+        res["properties"] = row[5]
+    return res
 
 
 @mcp.tool()
@@ -174,7 +164,7 @@ def search_connected_entities(
     tenant_graph: str = "",
 ) -> str:
     """
-    Search graph entities by partial name, identifier, or classification.
+    Search graph entities across any property, identifier, or classification without schema assumptions.
     """
     start_t = time.perf_counter()
     query = (query or "").strip()
@@ -189,8 +179,8 @@ def search_connected_entities(
     params: dict[str, Any] = {}
     if query:
         where_clauses.append(
-            "(toLower(coalesce(n.name, n.title, n.label, n.id, '')) CONTAINS toLower($query) "
-            "OR toLower(coalesce(n.id, n.code, n.key, '')) CONTAINS toLower($query))"
+            "(toLower(coalesce(n.name, n.title, n.label, n.id, n.code, n.key, '')) CONTAINS toLower($query) "
+            "OR any(k IN keys(n) WHERE toLower(toString(n[k])) CONTAINS toLower($query)))"
         )
         params["query"] = query
 
@@ -207,8 +197,9 @@ def search_connected_entities(
            coalesce(n.name, n.title, n.label, n.id, toString(id(n))) AS name,
            coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node') AS kind,
            coalesce(n.status, n.state, 'UNKNOWN') AS status,
-           coalesce(n.source_ref, n.source, 'discovered') AS source_ref
-    ORDER BY name
+           coalesce(n.source_ref, n.source, 'discovered') AS source_ref,
+           properties(n) AS properties
+    ORDER BY coalesce(n.name, n.title, n.id, toString(id(n)))
     LIMIT {limit}
     """
     rows = execute_ro_query(cypher, params=params, graph_name=target_graph)
@@ -230,7 +221,7 @@ def get_entity_profile(
 ) -> str:
     """
     Retrieve comprehensive intelligence for a specific entity including properties,
-    source provenance references, and both incoming and outgoing relationships.
+    source provenance references, connectivity status, and both incoming and outgoing relationships.
     """
     entity_id = entity_id.strip()
     if not entity_id:
@@ -241,12 +232,18 @@ def get_entity_profile(
     rows = execute_ro_query(
         """
         MATCH (n)
-        WHERE (n.id = $entity_id OR n.code = $entity_id OR n.key = $entity_id OR toString(id(n)) = $entity_id OR n.name = $entity_id)
+        WHERE toString(id(n)) = $entity_id
+           OR n.id = $entity_id
+           OR n.code = $entity_id
+           OR n.key = $entity_id
+           OR n.name = $entity_id
+           OR any(k IN keys(n) WHERE toString(n[k]) = $entity_id)
         RETURN coalesce(n.id, n.code, n.key, toString(id(n))),
                coalesce(n.name, n.title, n.label, n.id, toString(id(n))),
                coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node'),
                labels(n),
-               properties(n)
+               properties(n),
+               toString(id(n))
         LIMIT 1
         """,
         params={"entity_id": entity_id},
@@ -261,36 +258,45 @@ def get_entity_profile(
         })
 
     row = rows[0]
+    nid = row[5]
 
     outgoing = execute_ro_query(
         """
         MATCH (n)-[r]->(other)
-        WHERE (n.id = $entity_id OR n.code = $entity_id OR n.key = $entity_id OR toString(id(n)) = $entity_id OR n.name = $entity_id)
+        WHERE toString(id(n)) = $nid
         RETURN type(r),
                coalesce(other.id, other.code, other.key, toString(id(other))),
                coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
                coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
-               properties(r)
+               properties(r),
+               labels(other),
+               properties(other)
         LIMIT 50
         """,
-        params={"entity_id": entity_id},
+        params={"nid": nid},
         graph_name=target_graph,
     )
 
     incoming = execute_ro_query(
         """
         MATCH (other)-[r]->(n)
-        WHERE (n.id = $entity_id OR n.code = $entity_id OR n.key = $entity_id OR toString(id(n)) = $entity_id OR n.name = $entity_id)
+        WHERE toString(id(n)) = $nid
         RETURN type(r),
                coalesce(other.id, other.code, other.key, toString(id(other))),
                coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
                coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
-               properties(r)
+               properties(r),
+               labels(other),
+               properties(other)
         LIMIT 50
         """,
-        params={"entity_id": entity_id},
+        params={"nid": nid},
         graph_name=target_graph,
     )
+
+    is_isolated = len(outgoing) == 0 and len(incoming) == 0
+    total_rels = len(outgoing) + len(incoming)
+    exploration_status = "complete" if (len(outgoing) < 50 and len(incoming) < 50) else "partial"
 
     return serialize_json({
         "found": True,
@@ -304,7 +310,7 @@ def get_entity_profile(
         "outgoing_relationships": [
             {
                 "type": r[0],
-                "target": {"id": r[1], "name": r[2], "kind": r[3]},
+                "target": {"id": r[1], "name": r[2], "kind": r[3], "labels": r[5], "properties": r[6]},
                 "evidence": r[4],
             }
             for r in outgoing
@@ -312,11 +318,188 @@ def get_entity_profile(
         "incoming_relationships": [
             {
                 "type": r[0],
-                "source": {"id": r[1], "name": r[2], "kind": r[3]},
+                "source": {"id": r[1], "name": r[2], "kind": r[3], "labels": r[5], "properties": r[6]},
                 "evidence": r[4],
             }
             for r in incoming
         ],
+        "is_isolated": is_isolated,
+        "total_connected_relationships": total_rels,
+        "relationship_exploration_status": exploration_status,
+        "tenant_graph": target_graph,
+    })
+
+
+@mcp.tool()
+def inspect_entity_neighbors(
+    entity_id: str,
+    direction: str = "both",
+    relationship_types: Optional[list[str]] = None,
+    limit: int = 25,
+    tenant_graph: str = "",
+) -> str:
+    """
+    Inspect immediate neighboring entities and connected relationships for an arbitrary entity.
+    Returns actual adjacent nodes, relationship types, edge properties, and connectivity summary.
+    Supports direction ('both', 'outgoing', 'incoming') and optional relationship type filtering.
+    """
+    entity_id = entity_id.strip()
+    if not entity_id:
+        raise ValueError("entity_id must not be empty")
+
+    dir_clean = (direction or "both").strip().lower()
+    if dir_clean not in ("both", "outgoing", "incoming"):
+        dir_clean = "both"
+
+    limit = max(1, min(limit, 50))
+    target_graph = settings.validate_graph_name(tenant_graph)
+
+    rel_types = relationship_types or []
+    for r in rel_types:
+        if not SAFE_RELATIONSHIP_PATTERN.fullmatch(r):
+            raise ValueError(f"Invalid relationship type format: {r}")
+
+    find_rows = execute_ro_query(
+        """
+        MATCH (n)
+        WHERE toString(id(n)) = $entity_id
+           OR n.id = $entity_id
+           OR n.code = $entity_id
+           OR n.key = $entity_id
+           OR n.name = $entity_id
+           OR any(k IN keys(n) WHERE toString(n[k]) = $entity_id)
+        RETURN coalesce(n.id, n.code, n.key, toString(id(n))),
+               coalesce(n.name, n.title, n.label, n.id, toString(id(n))),
+               coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node'),
+               labels(n),
+               properties(n),
+               toString(id(n))
+        LIMIT 1
+        """,
+        params={"entity_id": entity_id},
+        graph_name=target_graph,
+    )
+
+    if not find_rows:
+        return serialize_json({
+            "found": False,
+            "entity_id": entity_id,
+            "message": f"Entity '{entity_id}' not found in graph '{target_graph}'.",
+            "tenant_graph": target_graph,
+        })
+
+    f_row = find_rows[0]
+    nid = f_row[5]
+
+    # Query connected relationship types summary
+    rel_type_summary_rows = execute_ro_query(
+        """
+        MATCH (n)-[r]-(other)
+        WHERE toString(id(n)) = $nid
+        RETURN type(r), count(r)
+        ORDER BY count(r) DESC
+        """,
+        params={"nid": nid},
+        graph_name=target_graph,
+    )
+    connected_rel_types = [
+        {"relationship_type": r[0], "count": r[1]}
+        for r in rel_type_summary_rows
+    ]
+
+    rel_filter = ""
+    filter_params: dict[str, Any] = {"nid": nid}
+    if rel_types:
+        rel_filter = "AND type(r) IN $rel_types"
+        filter_params["rel_types"] = rel_types
+
+    neighbors: list[dict[str, Any]] = []
+
+    if dir_clean in ("both", "outgoing"):
+        out_rows = execute_ro_query(
+            f"""
+            MATCH (n)-[r]->(other)
+            WHERE toString(id(n)) = $nid
+            {rel_filter}
+            RETURN type(r),
+                   properties(r),
+                   coalesce(other.id, other.code, other.key, toString(id(other))),
+                   coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
+                   coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
+                   labels(other),
+                   properties(other)
+            LIMIT {limit}
+            """,
+            params=filter_params,
+            graph_name=target_graph,
+        )
+        for r in out_rows:
+            neighbors.append({
+                "direction": "outgoing",
+                "relationship_type": r[0],
+                "relationship_properties": r[1],
+                "neighbor": {
+                    "id": r[2],
+                    "name": r[3],
+                    "kind": r[4],
+                    "labels": r[5],
+                    "properties": r[6],
+                },
+            })
+
+    if dir_clean in ("both", "incoming") and len(neighbors) < limit:
+        remaining = limit - len(neighbors)
+        in_rows = execute_ro_query(
+            f"""
+            MATCH (other)-[r]->(n)
+            WHERE toString(id(n)) = $nid
+            {rel_filter}
+            RETURN type(r),
+                   properties(r),
+                   coalesce(other.id, other.code, other.key, toString(id(other))),
+                   coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
+                   coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
+                   labels(other),
+                   properties(other)
+            LIMIT {remaining}
+            """,
+            params=filter_params,
+            graph_name=target_graph,
+        )
+        for r in in_rows:
+            neighbors.append({
+                "direction": "incoming",
+                "relationship_type": r[0],
+                "relationship_properties": r[1],
+                "neighbor": {
+                    "id": r[2],
+                    "name": r[3],
+                    "kind": r[4],
+                    "labels": r[5],
+                    "properties": r[6],
+                },
+            })
+
+    total_connections = sum(r[1] for r in rel_type_summary_rows)
+    is_isolated = total_connections == 0
+    contract = "complete" if total_connections <= limit else "partial"
+
+    return serialize_json({
+        "found": True,
+        "entity": {
+            "id": f_row[0],
+            "name": f_row[1],
+            "kind": f_row[2],
+            "labels": f_row[3],
+            "properties": f_row[4],
+        },
+        "direction": dir_clean,
+        "total_connections": total_connections,
+        "connected_relationship_types": connected_rel_types,
+        "neighbors_count": len(neighbors),
+        "neighbors": neighbors,
+        "is_isolated": is_isolated,
+        "relationship_contract": contract,
         "tenant_graph": target_graph,
     })
 
@@ -331,6 +514,7 @@ def traverse_relationships(
 ) -> str:
     """
     Explore multi-hop connected entities and return structured path chains with edge evidence.
+    Traverses arbitrary relationships across the connected graph without schema assumptions.
     """
     entity_id = entity_id.strip()
     if not entity_id:
@@ -342,13 +526,43 @@ def traverse_relationships(
     limit = max(1, min(limit, 50))
     target_graph = settings.validate_graph_name(tenant_graph)
 
+    start_rows = execute_ro_query(
+        """
+        MATCH (n)
+        WHERE toString(id(n)) = $entity_id
+           OR n.id = $entity_id
+           OR n.code = $entity_id
+           OR n.key = $entity_id
+           OR n.name = $entity_id
+           OR any(k IN keys(n) WHERE toString(n[k]) = $entity_id)
+        RETURN toString(id(n)), coalesce(n.id, n.code, n.key, toString(id(n)))
+        LIMIT 1
+        """,
+        params={"entity_id": entity_id},
+        graph_name=target_graph,
+    )
+
+    if not start_rows:
+        return serialize_json({
+            "found": False,
+            "start_entity_id": entity_id,
+            "depth_limit": depth,
+            "count": 0,
+            "paths": [],
+            "message": f"Entity '{entity_id}' not found in graph.",
+            "tenant_graph": target_graph,
+        })
+
+    start_nid = start_rows[0][0]
+    resolved_start_id = start_rows[0][1]
+
     rel_types = relationship_types or []
     for r in rel_types:
         if not SAFE_RELATIONSHIP_PATTERN.fullmatch(r):
             raise ValueError(f"Invalid relationship type format: {r}")
 
     path_filter = ""
-    params: dict[str, Any] = {"entity_id": entity_id}
+    params: dict[str, Any] = {"start_nid": start_nid}
 
     if rel_types:
         path_filter = """
@@ -359,17 +573,17 @@ def traverse_relationships(
 
     query = f"""
     MATCH p = (start)-[*1..{depth}]-(neighbor)
-    WHERE (start.id = $entity_id OR start.code = $entity_id OR start.key = $entity_id OR toString(id(start)) = $entity_id OR start.name = $entity_id)
-      AND (coalesce(neighbor.id, neighbor.code, toString(id(neighbor))) <> coalesce(start.id, start.code, toString(id(start))))
+    WHERE toString(id(start)) = $start_nid
+      AND toString(id(neighbor)) <> $start_nid
     {path_filter}
     RETURN
-        coalesce(neighbor.id, neighbor.code, toString(id(neighbor))),
+        coalesce(neighbor.id, neighbor.code, neighbor.key, toString(id(neighbor))),
         coalesce(neighbor.name, neighbor.title, neighbor.label, neighbor.id, toString(id(neighbor))),
         coalesce(neighbor.kind, head([lbl IN labels(neighbor) WHERE lbl <> 'Entity']), head(labels(neighbor)), 'Node'),
         length(p),
         [node IN nodes(p) |
             {{
-                id: coalesce(node.id, node.code, toString(id(node))),
+                id: coalesce(node.id, node.code, node.key, toString(id(node))),
                 name: coalesce(node.name, node.title, node.label, node.id, toString(id(node))),
                 kind: coalesce(node.kind, head([lbl IN labels(node) WHERE lbl <> 'Entity']), head(labels(node)), 'Node')
             }}]
@@ -379,10 +593,11 @@ def traverse_relationships(
                 type: type(rel),
                 source_record_id: rel.source_record_id,
                 observed_at: rel.observed_at,
-                confidence: rel.confidence
+                confidence: rel.confidence,
+                properties: properties(rel)
             }}]
             AS path_edges
-    ORDER BY length(p), neighbor.name
+    ORDER BY length(p), coalesce(neighbor.name, neighbor.id, toString(id(neighbor)))
     LIMIT {limit}
     """
     rows = execute_ro_query(query, params=params, graph_name=target_graph)
@@ -398,7 +613,8 @@ def traverse_relationships(
     ]
 
     return serialize_json({
-        "start_entity_id": entity_id,
+        "found": True,
+        "start_entity_id": resolved_start_id,
         "depth_limit": depth,
         "count": len(paths),
         "paths": paths,
@@ -429,8 +645,8 @@ def find_shortest_evidence_path(
 
     query = f"""
     MATCH p = (source)-[*1..{max_depth}]-(target)
-    WHERE (source.id = $source_id OR source.code = $source_id OR source.key = $source_id OR toString(id(source)) = $source_id OR source.name = $source_id)
-      AND (target.id = $target_id OR target.code = $target_id OR target.key = $target_id OR toString(id(target)) = $target_id OR target.name = $target_id)
+    WHERE (source.id = $source_id OR source.code = $source_id OR source.key = $source_id OR toString(id(source)) = $source_id OR source.name = $source_id OR any(k IN keys(source) WHERE toString(source[k]) = $source_id))
+      AND (target.id = $target_id OR target.code = $target_id OR target.key = $target_id OR toString(id(target)) = $target_id OR target.name = $target_id OR any(k IN keys(target) WHERE toString(target[k]) = $target_id))
     RETURN p
     ORDER BY length(p)
     LIMIT 1

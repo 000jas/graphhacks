@@ -29,7 +29,8 @@ def analyze_graph_impact(
     depth = max(1, min(max_depth, 6))
 
     root_rows = execute_ro_query(
-        "MATCH (n:Entity {id: $id}) RETURN n.id, n.name, n.kind, n.status, properties(n)",
+        "MATCH (n) WHERE (toString(id(n)) = $id OR n.id = $id OR n.name = $id) "
+        "RETURN coalesce(n.id, toString(id(n))), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, labels(n)[0], 'Entity'), n.status, properties(n)",
         params={"id": root_entity_id},
         graph_name=graph_name,
     )
@@ -51,12 +52,13 @@ def analyze_graph_impact(
     dir_pattern = "-[r]->" if direction == "downstream" else "<-[r]-" if direction == "upstream" else "-[r]-"
 
     query = f"""
-    MATCH p = (root:Entity {{id: $root_id}}){dir_pattern}(impacted:Entity)
-    WHERE impacted.id <> root.id
+    MATCH p = (root){dir_pattern}(impacted)
+    WHERE (toString(id(root)) = $root_id OR root.id = $root_id OR root.name = $root_id)
+      AND id(impacted) <> id(root)
     RETURN
-        impacted.id,
-        impacted.name,
-        impacted.kind,
+        coalesce(impacted.id, toString(id(impacted))),
+        coalesce(impacted.name, impacted.id, toString(id(impacted))),
+        coalesce(impacted.kind, labels(impacted)[0], 'Entity'),
         impacted.status,
         type(r),
         properties(r)
@@ -66,17 +68,18 @@ def analyze_graph_impact(
 
     path_pattern = f"-[*1..{depth}]->" if direction == "downstream" else f"<-[*1..{depth}]-" if direction == "upstream" else f"-[*1..{depth}]-"
     path_query = f"""
-    MATCH p = (root:Entity {{id: $root_id}}){path_pattern}(impacted:Entity)
-    WHERE impacted.id <> root.id
+    MATCH p = (root){path_pattern}(impacted)
+    WHERE (toString(id(root)) = $root_id OR root.id = $root_id OR root.name = $root_id)
+      AND id(impacted) <> id(root)
     RETURN
-        impacted.id,
-        impacted.name,
-        impacted.kind,
+        coalesce(impacted.id, toString(id(impacted))),
+        coalesce(impacted.name, impacted.id, toString(id(impacted))),
+        coalesce(impacted.kind, labels(impacted)[0], 'Entity'),
         impacted.status,
         length(p) AS hop_distance,
-        [node IN nodes(p) | {{id: node.id, name: node.name, kind: node.kind}}] AS path_nodes,
+        [node IN nodes(p) | {{id: coalesce(node.id, toString(id(node))), name: coalesce(node.name, node.id, toString(id(node))), kind: coalesce(node.kind, labels(node)[0], 'Entity')}}] AS path_nodes,
         [rel IN relationships(p) | type(rel)] AS path_relationships
-    ORDER BY hop_distance, impacted.name
+    ORDER BY hop_distance, coalesce(impacted.name, impacted.id, toString(id(impacted)))
     LIMIT 100
     """
     path_rows = execute_ro_query(path_query, params={"root_id": root_entity_id}, graph_name=graph_name)
@@ -180,12 +183,13 @@ def assess_change_risk_and_impact(
     target_info = base_impact["root_entity"]
 
     isolated_query = """
-    MATCH (target:Entity {id: $tid})-[r]-(neighbor:Entity)
+    MATCH (target)-[r]-(neighbor)
+    WHERE (toString(id(target)) = $tid OR target.id = $tid OR target.name = $tid)
     WITH neighbor, count(r) AS rels_to_target
     MATCH (neighbor)-[all_r]-()
     WITH neighbor, rels_to_target, count(all_r) AS total_rels
     WHERE total_rels = rels_to_target
-    RETURN neighbor.id, neighbor.name, neighbor.kind
+    RETURN coalesce(neighbor.id, toString(id(neighbor))), coalesce(neighbor.name, neighbor.id, toString(id(neighbor))), coalesce(neighbor.kind, labels(neighbor)[0], 'Entity')
     LIMIT 20
     """
     isolated_rows = execute_ro_query(isolated_query, params={"tid": clean_target_id}, graph_name=target_graph)
@@ -201,18 +205,19 @@ def assess_change_risk_and_impact(
 
     fallback_analysis = []
     direct_query = """
-    MATCH (target:Entity {id: $tid})<-[r]-(dependent:Entity)
-    WHERE dependent.kind IN ['Service', 'Release', 'Task', 'Repository']
-    RETURN dependent.id, dependent.name, dependent.kind, type(r)
+    MATCH (target)<-[r]-(dependent)
+    WHERE (toString(id(target)) = $tid OR target.id = $tid OR target.name = $tid)
+    RETURN coalesce(dependent.id, toString(id(dependent))), coalesce(dependent.name, dependent.id, toString(id(dependent))), coalesce(dependent.kind, labels(dependent)[0], 'Entity'), type(r)
     LIMIT 10
     """
     dependent_rows = execute_ro_query(direct_query, params={"tid": clean_target_id}, graph_name=target_graph)
 
     for dep_id, dep_name, dep_kind, r_type in dependent_rows:
         alt_query = """
-        MATCH (dep:Entity {id: $dep_id})-[r2]->(alt:Entity)
-        WHERE alt.id <> $tid AND type(r2) = $rtype
-        RETURN alt.id, alt.name, alt.kind
+        MATCH (dep)-[r2]->(alt)
+        WHERE (toString(id(dep)) = $dep_id OR dep.id = $dep_id OR dep.name = $dep_id)
+          AND (alt.id <> $tid AND toString(id(alt)) <> $tid) AND type(r2) = $rtype
+        RETURN coalesce(alt.id, toString(id(alt))), coalesce(alt.name, alt.id, toString(id(alt))), coalesce(alt.kind, labels(alt)[0], 'Entity')
         LIMIT 5
         """
         alt_rows = execute_ro_query(alt_query, params={"dep_id": dep_id, "tid": clean_target_id, "rtype": r_type}, graph_name=target_graph)
@@ -230,8 +235,9 @@ def assess_change_risk_and_impact(
         })
 
     prereq_query = """
-    MATCH (target:Entity {id: $tid})-[:BLOCKED_BY|REQUIRES|GOVERNED_BY*1..2]->(req:Entity)
-    RETURN DISTINCT req.id, req.name, req.kind, req.status, properties(req)
+    MATCH (target)-[r*1..2]->(req)
+    WHERE (toString(id(target)) = $tid OR target.id = $tid OR target.name = $tid)
+    RETURN DISTINCT coalesce(req.id, toString(id(req))), coalesce(req.name, req.id, toString(id(req))), coalesce(req.kind, labels(req)[0], 'Entity'), req.status, properties(req)
     LIMIT 15
     """
     prereq_rows = execute_ro_query(prereq_query, params={"tid": clean_target_id}, graph_name=target_graph)
