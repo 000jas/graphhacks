@@ -168,7 +168,7 @@ def entity_row(row: list[Any]) -> dict[str, Any]:
 
 @mcp.tool()
 def search_connected_entities(
-    query: str,
+    query: str = "",
     limit: int = 10,
     kind: str = "",
     tenant_graph: str = "",
@@ -177,26 +177,32 @@ def search_connected_entities(
     Search graph entities by partial name, identifier, or classification.
     """
     start_t = time.perf_counter()
-    query = query.strip()
-    if not query:
-        raise ValueError("query must not be empty")
+    query = (query or "").strip()
+    kind = (kind or "").strip()
     if len(query) > 200:
         raise ValueError("query must be at most 200 characters")
 
     limit = max(1, min(limit, 25))
     target_graph = settings.validate_graph_name(tenant_graph)
 
-    kind_filter = ""
-    params: dict[str, Any] = {"query": query}
+    where_clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if query:
+        where_clauses.append(
+            "(toLower(coalesce(n.name, n.title, n.label, n.id, '')) CONTAINS toLower($query) "
+            "OR toLower(coalesce(n.id, n.code, n.key, '')) CONTAINS toLower($query))"
+        )
+        params["query"] = query
+
     if kind:
-        kind_filter = "AND (n.kind = $kind OR $kind IN labels(n))"
+        where_clauses.append("(n.kind = $kind OR $kind IN labels(n))")
         params["kind"] = kind
+
+    where_stmt = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
     cypher = f"""
     MATCH (n)
-    WHERE (toLower(coalesce(n.name, n.title, n.label, n.id, '')) CONTAINS toLower($query)
-       OR toLower(coalesce(n.id, n.code, n.key, '')) CONTAINS toLower($query))
-       {kind_filter}
+    {where_stmt}
     RETURN coalesce(n.id, n.code, n.key, toString(id(n))) AS id,
            coalesce(n.name, n.title, n.label, n.id, toString(id(n))) AS name,
            coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node') AS kind,
