@@ -56,13 +56,10 @@ def validate_property_name(prop_name: str) -> str:
 class Settings:
     """Application settings loaded from environment variables."""
 
-    host: str = os.getenv(
-        "FALKORDB_HOST",
-        "r-6jissuruar.instance-27k50cn68.hc-7up0crkyn.ap-south-1.aws.f2e0a955bb84.cloud",
-    )
-    port: int = int(os.getenv("FALKORDB_PORT", "54637"))
-    username: Optional[str] = os.getenv("FALKORDB_USERNAME", "falkordb") or None
-    password: Optional[str] = os.getenv("FALKORDB_PASSWORD", "aOuxFFj8vO6A") or None
+    host: str = os.getenv("FALKORDB_HOST", "127.0.0.1")
+    port: int = int(os.getenv("FALKORDB_PORT", "6379"))
+    username: Optional[str] = os.getenv("FALKORDB_USERNAME") or None
+    password: Optional[str] = os.getenv("FALKORDB_PASSWORD") or None
     ssl: bool = os.getenv("FALKORDB_SSL", "false").lower() in ("true", "1", "yes")
 
     default_graph: str = os.getenv("GRAPHOS_GRAPH_NAME", "ALL_GRAPHS")

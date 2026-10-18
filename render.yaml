@@ -1,0 +1,40 @@
+# ==============================================================================
+# GraphOS Backend Render Blueprint Specification
+# Deploys the FastAPI Agent Backend on Render
+# ==============================================================================
+services:
+  - type: web
+    name: graphos-backend
+    env: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn agent.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MCP_SERVER_COMMAND
+        value: python
+      - key: MCP_SERVER_ARGS
+        value: mcp_server/server.py
+      - key: GRAPHOS_GRAPH_NAME
+        value: ALL_GRAPHS
+      - key: GRAPHOS_SECURE_COOKIE
+        value: "true"
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: FALKORDB_HOST
+        sync: false
+      - key: FALKORDB_PORT
+        sync: false
+      - key: FALKORDB_USERNAME
+        sync: false
+      - key: FALKORDB_PASSWORD
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

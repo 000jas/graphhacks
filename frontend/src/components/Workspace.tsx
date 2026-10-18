@@ -110,6 +110,7 @@ export function Workspace({
   const abortControllerRef = useRef<AbortController | null>(null);
   const [isReasoningExpanded, setIsReasoningExpanded] = useState<boolean>(true);
   const [copiedAnswer, setCopiedAnswer] = useState<boolean>(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   const refreshConversations = async () => {
     try {
@@ -852,8 +853,23 @@ export function Workspace({
           {/* Past Conversation Turns (Loaded from FalkorDB Chat History) */}
           {pastMessages.length > 0 && (
             <div className="space-y-6">
-              {pastMessages.map((msg) =>
-                msg.role === "user" ? (
+              {pastMessages.map((msg, idx) => {
+                // If currentResult is active and displaying the latest findings card below the events accordion,
+                // do not render the same latest assistant findings twice in this list.
+                const lastAssistantIdx = pastMessages.reduce(
+                  (last, m, i) => (m.role === "assistant" ? i : last),
+                  -1
+                );
+                const isCurrentAssistant =
+                  msg.role === "assistant" &&
+                  currentResult !== null &&
+                  idx === lastAssistantIdx;
+
+                if (isCurrentAssistant) {
+                  return null;
+                }
+
+                return msg.role === "user" ? (
                   <div
                     key={msg.id}
                     className="flex items-start gap-3.5 p-4 sm:p-5 rounded-2xl bg-white border border-[#4370aa]/15 shadow-xs"
@@ -892,13 +908,28 @@ export function Workspace({
                           Verified Grounded Findings
                         </span>
                       </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(msg.content);
+                          setCopiedMessageId(msg.id);
+                          setTimeout(() => setCopiedMessageId(null), 2000);
+                        }}
+                        className="p-1.5 rounded-lg border border-[#4370aa]/20 hover:bg-[#eff7ff] text-[#71849e] hover:text-[#102f58] transition cursor-pointer"
+                        title="Copy markdown findings"
+                      >
+                        {copiedMessageId === msg.id ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                     </div>
                     <div className="prose prose-slate max-w-none text-[#102f58] leading-relaxed">
                       <FormattedMarkdown content={msg.content} />
                     </div>
                   </div>
-                )
-              )}
+                );
+              })}
             </div>
           )}
 

@@ -42,6 +42,6 @@ USER graphos
 # Expose API and dashboard ports
 EXPOSE 8000 8501
 
-# Default entrypoint: GraphOS CLI
-ENTRYPOINT ["python", "-m", "agent"]
-CMD []
+# Default command: FastAPI Agent Backend on $PORT (default 8000)
+CMD ["sh", "-c", "uvicorn agent.api:app --host 0.0.0.0 --port ${PORT:-8000}"]
+

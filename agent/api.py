@@ -48,15 +48,23 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS configuration supporting credentials (cookies) across local and cloud environments
+# CORS configuration supporting credentials (cookies) across local and cloud environments (e.g. Vercel)
+cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+env_frontend_url = os.getenv("FRONTEND_URL")
+if env_frontend_url:
+    for u in env_frontend_url.split(","):
+        cleaned = u.strip().rstrip("/")
+        if cleaned and cleaned not in cors_origins:
+            cors_origins.append(cleaned)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ],
+    allow_origins=cors_origins,
     allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
@@ -986,11 +994,11 @@ async def approve_remediation_action(req: ApproveActionRequest) -> dict[str, Any
 # ============================================================================
 
 @app.post("/api/auth/signup")
-async def auth_signup(req: SignUpRequest, response: Response):
+async def auth_signup(req: SignUpRequest, request: Request, response: Response):
     """Register a new user in graphos_auth with secure Argon2 password hashing."""
     try:
         user, session_token = signup_user(name=req.name, email=req.email, password=req.password)
-        set_auth_cookie(response, session_token)
+        set_auth_cookie(response, session_token, request=request)
         return {
             "status": "success",
             "user": user,
@@ -1004,11 +1012,11 @@ async def auth_signup(req: SignUpRequest, response: Response):
 
 
 @app.post("/api/auth/login")
-async def auth_login(req: LoginRequest, response: Response):
+async def auth_login(req: LoginRequest, request: Request, response: Response):
     """Authenticate user with email and Argon2 hash comparison, creating a secure session."""
     try:
         user, session_token = login_user(email=req.email, password=req.password)
-        set_auth_cookie(response, session_token)
+        set_auth_cookie(response, session_token, request=request)
         return {
             "status": "success",
             "user": user,
@@ -1027,7 +1035,7 @@ async def auth_logout(request: Request, response: Response):
     token = extract_session_token(request)
     if token:
         revoke_session(token)
-    clear_auth_cookie(response)
+    clear_auth_cookie(response, request=request)
     return {"status": "success", "message": "Logged out successfully"}
 
 

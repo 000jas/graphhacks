@@ -100,9 +100,9 @@ cp .env.example .env
 Edit `.env` with your FalkorDB Cloud and LLM provider credentials:
 ```dotenv
 # --- FalkorDB Cloud Connection ---
-FALKORDB_HOST=r-6jissuruar.instance-27k50cn68.hc-7up0crkyn.ap-south-1.aws.f2e0a955bb84.cloud
-FALKORDB_PORT=54637
-FALKORDB_USERNAME=falkordb
+FALKORDB_HOST=your-falkordb-host.cloud
+FALKORDB_PORT=6379
+FALKORDB_USERNAME=default
 FALKORDB_PASSWORD=your_falkordb_password
 FALKORDB_SSL=false
 GRAPHOS_GRAPH_NAME=graphos_dev

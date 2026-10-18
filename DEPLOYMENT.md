@@ -79,22 +79,66 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🌐 Production Deployment
 
-### Option A: Frontend on Vercel
-1. Push this repository to GitHub.
-2. In the Vercel Dashboard, import the repository and select `frontend` as the **Root Directory**.
-3. Set the Environment Variable:
-   - `NEXT_PUBLIC_API_URL`: Your deployed backend URL (e.g. `https://graphos-api.onrender.com`).
-4. Click **Deploy**.
+### 1. Backend Deployment on Render (Root Directory)
 
-### Option B: Backend on Render / Fly.io / Docker
-Deploy using the included root `Dockerfile`:
+You can deploy the backend directly to **Render** as a Python Web Service or via the included [render.yaml](file:///Users/ojasdhapse/Ojas/projects2/graphs/render.yaml) Blueprint:
+
+#### Render Dashboard Settings
+- **Root Directory:** `.` (leave empty or set to root)
+- **Environment:** `Python 3`
+- **Build Command:**
+  ```bash
+  pip install -r requirements.txt
+  ```
+- **Start Command:**
+  ```bash
+  uvicorn agent.api:app --host 0.0.0.0 --port $PORT
+  ```
+- **Health Check Path:** `/api/health`
+
+#### Required Environment Variables on Render
+Set these in your Render Web Service **Environment** tab:
+| Variable | Value | Notes |
+| :--- | :--- | :--- |
+| `FALKORDB_HOST` | `xxxx.falkordb.cloud` | Your FalkorDB Cloud endpoint |
+| `FALKORDB_PORT` | `xxxx` | Port (e.g. 12345) |
+| `FALKORDB_PASSWORD` | `your_falkordb_password` | FalkorDB database password |
+| `FALKORDB_GRAPH` | `ALL_GRAPHS` | Default graph name |
+| `NVIDIA_API_KEY` | `nvapi-xxxx` | NVIDIA NIM API key for LLM |
+| `LLM_PROVIDER` | `nvidia` | Or `mock` for offline testing |
+| `GRAPHOS_SECURE_COOKIE` | `true` | Enables secure cross-site cookies |
+| `FRONTEND_URL` | `https://your-app.vercel.app` | Your Vercel frontend URL for CORS |
+
+Once deployed, Render gives you a live URL, e.g.: `https://graphos-backend.onrender.com`.
+
+---
+
+### 2. Frontend Deployment on Vercel (`frontend` Directory)
+
+#### Vercel CLI (Fastest)
+From your terminal:
 ```bash
-# Build Docker container
-docker build -t graphos-backend .
-
-# Run with environment variables
-docker run -p 8000:8000 --env-file .env graphos-backend python -m uvicorn agent.api:app --host 0.0.0.0 --port 8000
+cd frontend
+npx vercel
 ```
+Or for production:
+```bash
+cd frontend
+npx vercel --prod
+```
+
+#### Vercel Web Dashboard
+1. Go to [vercel.com](https://vercel.com) and click **Add New Project**.
+2. Select your GitHub repository (`graphhacks`).
+3. In **Project Configuration**:
+   - **Root Directory:** Click Edit and select `frontend`
+   - **Framework Preset:** `Next.js` (detected automatically)
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `.next`
+4. In **Environment Variables**:
+   - Add: `NEXT_PUBLIC_API_URL`
+   - Value: Your Render backend URL (e.g. `https://graphos-backend.onrender.com`)
+5. Click **Deploy**.
 
 ---
 
@@ -103,3 +147,5 @@ docker run -p 8000:8000 --env-file .env graphos-backend python -m uvicorn agent.
 - All database access is strictly mediated by the GraphOS MCP server.
 - The web frontend **never** connects directly to FalkorDB; credentials stay entirely server-side.
 - Application guardrails enforce read-only Cypher operations, rejecting any mutation (`CREATE`, `MERGE`, `DELETE`, `DROP`).
+- Cross-origin authentication supports both secure `SameSite=None; Secure` cookies and `Authorization: Bearer <token>` headers for Safari and third-party cookie compatibility.
+

@@ -8,13 +8,28 @@ import {
   ConversationDetail,
 } from "../types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+
+export function getAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (typeof window !== "undefined") {
+    try {
+      const token = localStorage.getItem("graphos_session_token");
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return headers;
+}
 
 export async function getHealth(): Promise<HealthStatus | null> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/health`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
     });
     if (!res.ok) return null;
@@ -92,7 +107,7 @@ export async function executeInvestigationStream(
   try {
     const res = await fetch(`${API_BASE_URL}/api/investigate/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
       body: JSON.stringify({
         objective,
@@ -241,7 +256,7 @@ export async function ingestCodeJson(
 ): Promise<{ status: string; graph_name: string; nodes_ingested: number; edges_ingested: number }> {
   const res = await fetch(`${API_BASE_URL}/api/ingest/code-json`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
     body: JSON.stringify({ graph_name: graphName, data }),
   });
@@ -259,7 +274,7 @@ export async function ingestCsv(
 ): Promise<{ status: string; graph_name: string; rows_processed: number; domain_detected: string; nodes_ingested: number; edges_ingested: number }> {
   const res = await fetch(`${API_BASE_URL}/api/ingest/csv`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
     body: JSON.stringify({ graph_name: graphName, csv_text: csvText, domain }),
   });
@@ -278,7 +293,7 @@ export async function approveRemediation(
 ): Promise<any> {
   const res = await fetch(`${API_BASE_URL}/api/remediation/approve`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
     body: JSON.stringify({
       action_type: actionType,
@@ -301,7 +316,7 @@ export async function getMe(): Promise<User | null> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
     });
     if (!res.ok) return null;
@@ -319,7 +334,7 @@ export async function signupUser(
 ): Promise<{ user: User; session_token: string }> {
   const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
     body: JSON.stringify({ name, email, password }),
   });
@@ -327,7 +342,13 @@ export async function signupUser(
     const err = await res.json().catch(() => ({ detail: "Sign up failed" }));
     throw new Error(err.detail || "Sign up failed");
   }
-  return await res.json();
+  const data = await res.json();
+  if (typeof window !== "undefined" && data?.session_token) {
+    try {
+      localStorage.setItem("graphos_session_token", data.session_token);
+    } catch {}
+  }
+  return data;
 }
 
 export async function loginUser(
@@ -336,7 +357,7 @@ export async function loginUser(
 ): Promise<{ user: User; session_token: string }> {
   const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
     body: JSON.stringify({ email, password: password || undefined }),
   });
@@ -344,13 +365,24 @@ export async function loginUser(
     const err = await res.json().catch(() => ({ detail: "Login failed" }));
     throw new Error(err.detail || "Account not found with this email. Please check your email or sign up.");
   }
-  return await res.json();
+  const data = await res.json();
+  if (typeof window !== "undefined" && data?.session_token) {
+    try {
+      localStorage.setItem("graphos_session_token", data.session_token);
+    } catch {}
+  }
+  return data;
 }
 
 export async function logoutUser(): Promise<void> {
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.removeItem("graphos_session_token");
+    } catch {}
+  }
   await fetch(`${API_BASE_URL}/api/auth/logout`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
   }).catch(() => {});
 }
@@ -363,7 +395,7 @@ export async function getConversations(): Promise<ConversationSummary[]> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/conversations`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
     });
     if (!res.ok) return [];
@@ -381,7 +413,7 @@ export async function createConversation(
   try {
     const res = await fetch(`${API_BASE_URL}/api/conversations`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
       body: JSON.stringify({ title, graph_name: graphName }),
     });
@@ -397,7 +429,7 @@ export async function getConversation(conversationId: string): Promise<Conversat
   try {
     const res = await fetch(`${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
     });
     if (!res.ok) return null;
@@ -412,7 +444,7 @@ export async function deleteConversation(conversationId: string): Promise<boolea
   try {
     const res = await fetch(`${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
     });
     return res.ok;

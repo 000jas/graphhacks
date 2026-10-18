@@ -371,29 +371,44 @@ def set_auth_cookie(response: Response, session_token: str, request: Optional[Re
     """Attach secure HttpOnly cookie for session token."""
     is_secure = False
     if request is not None:
-        is_secure = request.url.scheme == "https"
-    elif os.getenv("GRAPHOS_SECURE_COOKIE", "false").lower() in ("true", "1"):
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme).lower()
+        is_secure = proto == "https"
+    if os.getenv("GRAPHOS_SECURE_COOKIE", "false").lower() in ("true", "1") or os.getenv("RENDER"):
         is_secure = True
+
+    # When deployed cross-site (e.g. Vercel frontend on *.vercel.app -> Render backend on *.onrender.com),
+    # cookies over HTTPS require samesite="none" and secure=True so browsers include them in fetch requests.
+    samesite = "none" if is_secure else "lax"
 
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_token,
         max_age=SESSION_DURATION_SECONDS,
         httponly=True,
-        samesite="lax",
+        samesite=samesite,
         secure=is_secure,
         path="/",
     )
 
 
-def clear_auth_cookie(response: Response) -> None:
+def clear_auth_cookie(response: Response, request: Optional[Request] = None) -> None:
     """Clear session cookie on logout."""
+    is_secure = False
+    if request is not None:
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme).lower()
+        is_secure = proto == "https"
+    if os.getenv("GRAPHOS_SECURE_COOKIE", "false").lower() in ("true", "1") or os.getenv("RENDER"):
+        is_secure = True
+    samesite = "none" if is_secure else "lax"
+
     response.delete_cookie(
         key=SESSION_COOKIE_NAME,
         path="/",
         httponly=True,
-        samesite="lax",
+        samesite=samesite,
+        secure=is_secure,
     )
+
 
 
 def extract_session_token(request: Request) -> Optional[str]:
