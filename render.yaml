@@ -22,6 +22,10 @@ services:
         value: ALL_GRAPHS
       - key: GRAPHOS_SECURE_COOKIE
         value: "true"
+      - key: AGENT_READ_ONLY
+        value: "false"
+      - key: AGENT_ALLOW_ACTION_EXECUTION
+        value: "true"
       - key: LLM_PROVIDER
         sync: false
       - key: LLM_MODEL

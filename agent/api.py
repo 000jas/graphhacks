@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import replace
 from typing import Any, AsyncGenerator, Optional
@@ -714,6 +715,75 @@ async def get_demo_scenario(scenario: str):
     return DEMO_SCENARIOS[s_key]
 
 
+async def _attach_action_lifecycle(
+    result_dict: dict[str, Any],
+    objective: str,
+    tenant_graph: Optional[str] = None,
+    active_settings: Optional[AgentSettings] = None,
+) -> dict[str, Any]:
+    """
+    Automatically evaluate grounded findings and plan corrective action
+    via the ActionSupervisor (Stages 1-5: Detect -> Investigate -> Plan -> Verify -> Request Approval).
+    Enforces risk assessment and Human-in-the-Loop approval tokens.
+    """
+    try:
+        from agent.supervisor import ActionSupervisor
+        supervisor = ActionSupervisor(settings=active_settings or settings)
+
+        entities = result_dict.get("evidence_summary", {}).get("entities", {})
+        answer = result_dict.get("final_answer", "")
+        combined_text = f"{objective}\n{answer}"
+
+        target_id = None
+        action_type = None
+
+        # 1. Infer focal target ID from grounded entities or text
+        if entities:
+            target_id = next(iter(entities.keys()))
+        else:
+            id_match = re.search(
+                r"\b(P-\d+|ADDR-\d+|A-\d+|ALERT-\d+|CVE-[\d-]+|svc-[\w-]+|role-[\w-]+|PR-\d+|ISSUE-\d+)\b",
+                combined_text,
+                re.I,
+            )
+            if id_match:
+                target_id = id_match.group(1)
+
+        if not target_id:
+            return result_dict
+
+        # 2. Infer domain-appropriate action type and operational rationale
+        low_text = combined_text.lower()
+        if "duplicate" in low_text or "merge" in low_text or (isinstance(target_id, str) and target_id.startswith("P-")):
+            action_type = "MERGE_DUPLICATES"
+            rationale = f"Supervisor planned consolidation of duplicate identity records linked to {target_id}."
+        elif "cve" in low_text or "vulnerability" in low_text or "rce" in low_text:
+            action_type = "APPLY_SECURITY_PATCH"
+            rationale = f"Supervisor planned security patching and network isolation for vulnerable asset {target_id}."
+        elif "revoke" in low_text or "iam" in low_text or "role" in low_text or "privilege" in low_text:
+            action_type = "REVOKE_ACCESS"
+            rationale = f"Supervisor planned revocation of excessive privileges on {target_id}."
+        elif "freeze" in low_text or "mule" in low_text or "fraud" in low_text or "suspicious" in low_text:
+            action_type = "FREEZE_ACCOUNT"
+            rationale = f"Supervisor planned immediate risk freeze on high-velocity suspicious entity {target_id}."
+        else:
+            action_type = "UPDATE_STATUS"
+            rationale = f"Supervisor planned status verification and property remediation on {target_id}."
+
+        target_g = tenant_graph or (active_settings.graph_name if active_settings else settings.graph_name)
+        plan_record = await supervisor.run_plan_phase(
+            objective=objective,
+            target_id=target_id,
+            action_type=action_type,
+            rationale=rationale,
+            tenant_graph=target_g,
+        )
+        result_dict["action_lifecycle"] = plan_record.to_dict()
+    except Exception as exc:
+        logger.debug(f"Action lifecycle auto-planning skipped: {exc}")
+    return result_dict
+
+
 @app.post("/api/investigate")
 async def run_investigation(req: InvestigateRequest, request: Request):
     """Execute a complete graph investigation and return the full result synchronously against live FalkorDB."""
@@ -733,7 +803,14 @@ async def run_investigation(req: InvestigateRequest, request: Request):
     investigator = GraphOSInvestigator(settings=active_settings)
     try:
         result = await investigator.investigate(objective=req.objective)
-        return result.to_dict()
+        res_dict = result.to_dict()
+        res_dict = await _attach_action_lifecycle(
+            res_dict,
+            req.objective,
+            tenant_graph=req.tenant_graph,
+            active_settings=active_settings,
+        )
+        return res_dict
     except Exception as exc:
         logger.error(f"Investigation execution error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -834,6 +911,12 @@ async def stream_investigation(req: InvestigateRequest, request: Request):
                 )
                 
                 result_dict = res.to_dict()
+                result_dict = await _attach_action_lifecycle(
+                    result_dict,
+                    req.objective,
+                    tenant_graph=req.tenant_graph,
+                    active_settings=active_settings,
+                )
                 if conv_id:
                     result_dict["conversation_id"] = conv_id
 

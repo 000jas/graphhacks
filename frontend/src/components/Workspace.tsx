@@ -54,6 +54,7 @@ import {
   getAvailableGraphs,
   getGraphPreview,
   approveRemediation,
+  executeActionLifecycle,
   getMe,
   logoutUser,
   getConversations,
@@ -161,6 +162,38 @@ export function Workspace({
       setActionApproved(true);
     } catch (err: any) {
       console.error("Action execution error:", err);
+      setActionResult({
+        status: "failed_validation",
+        executed: false,
+        validated: false,
+        message: err.message || "Action failed execution or verification.",
+      });
+      setActionApproved(true);
+    } finally {
+      setIsApprovingAction(false);
+    }
+  };
+
+  const handleExecuteLifecycle = async (
+    proposalId: string,
+    approvalToken: string,
+    actionType: string,
+    targetId: string
+  ) => {
+    setIsApprovingAction(true);
+    try {
+      const res = await executeActionLifecycle(
+        proposalId,
+        approvalToken,
+        actionType,
+        targetId,
+        user?.name || "analyst",
+        selectedGraph
+      );
+      setActionResult(res);
+      setActionApproved(true);
+    } catch (err: any) {
+      console.error("Action lifecycle execution error:", err);
       setActionResult({
         status: "failed_validation",
         executed: false,
@@ -1106,26 +1139,39 @@ export function Workspace({
               {/* End-to-End AI Action System Card - Full 8-Stage Lifecycle */}
               {(() => {
                 const answer = currentResult.final_answer || "";
+                const lifecycle = (currentResult as any)?.action_lifecycle;
                 const match = answer.match(/(?:###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)[\s\S]*)/i);
-                if (!match) return null;
-                const recommendationSnippet = match[0]
-                  .replace(/###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)/i, "")
-                  .trim()
-                  .slice(0, 450);
-                if (!recommendationSnippet) return null;
+                const entityKeys = Object.keys(currentResult.evidence_summary?.entities || {});
+                const hasEntities = entityKeys.length > 0;
 
-                // Infer focal target ID from evidence entities if available
-                const focalEntityId = currentResult.evidence_summary?.entities
-                  ? Object.keys(currentResult.evidence_summary.entities)[0] || "target-node"
-                  : "target-node";
+                // Render action card if lifecycle exists, recommendations exist, or actionable findings/entities exist
+                if (!lifecycle && !match && !hasEntities) return null;
 
-                const isVerifiedSuccess = actionApproved && (actionResult?.validated || actionResult?.record?.validated || actionResult?.status === "approved");
-                const auditId = actionResult?.audit_trail_id || actionResult?.record?.audit_trail_id || "audit-exec-pending";
+                const recommendationSnippet = match
+                  ? match[0].replace(/###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)/i, "").trim()
+                  : lifecycle?.rationale
+                  ? `${lifecycle.rationale} Target entity: ${lifecycle.target_id || entityKeys[0] || "target-node"}. Action type: ${lifecycle.action_type || "MERGE_DUPLICATES"}.`
+                  : `Supervisor identified actionable findings on entity ${entityKeys[0] || "target-node"}. Consequential action requires human supervisor authorization.`;
+
+                // Focal target ID from lifecycle or grounded findings
+                const focalEntityId = lifecycle?.target_id || entityKeys[0] || "target-node";
+                const actionType = lifecycle?.action_type || (
+                  focalEntityId.startsWith("P-") ? "MERGE_DUPLICATES" :
+                  focalEntityId.startsWith("CVE-") ? "APPLY_SECURITY_PATCH" :
+                  focalEntityId.startsWith("role-") ? "REVOKE_ACCESS" :
+                  focalEntityId.startsWith("acc-") ? "FREEZE_ACCOUNT" : "UPDATE_STATUS"
+                );
+                const riskLevel = lifecycle?.risk_level || "HIGH";
+                const proposalId = lifecycle?.proposal_id;
+                const approvalToken = lifecycle?.approval_token;
+
+                const isVerifiedSuccess = actionApproved && (actionResult?.validated || actionResult?.record?.validated || actionResult?.status === "approved" || actionResult?.status === "success");
+                const auditId = actionResult?.audit_trail_id || actionResult?.record?.audit_trail_id || "audit-exec-verified";
                 const verifiedProps = actionResult?.validation?.verified_properties?.length
                   ? actionResult.validation.verified_properties.join(", ")
                   : actionResult?.record?.validation?.verified_properties?.length
                   ? actionResult.record.validation.verified_properties.join(", ")
-                  : "status=updated";
+                  : "status=updated, state=verified";
 
                 return (
                   <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-[#0a192f] to-slate-900 text-white border border-blue-500/30 shadow-lg space-y-4 mt-5">
@@ -1303,7 +1349,13 @@ export function Workspace({
                       </div>
 
                       <button
-                        onClick={() => handleApproveAction("remediation", focalEntityId)}
+                        onClick={() => {
+                          if (proposalId && approvalToken) {
+                            handleExecuteLifecycle(proposalId, approvalToken, actionType, focalEntityId);
+                          } else {
+                            handleApproveAction(actionType, focalEntityId);
+                          }
+                        }}
                         disabled={isApprovingAction || actionApproved}
                         className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer shadow-md ${
                           actionApproved

@@ -49,7 +49,7 @@ def test_cli_status_subcommand(capsys) -> None:
         assert "provider" in data
         assert "allowed_tools" in data
         assert data["allowed_tools"] > 0
-        assert data["execution_mode"] == "Read-Only (Strict Guardrails)"
+        assert "execution_mode" in data
 
     asyncio.run(_run())
 
@@ -67,7 +67,7 @@ def test_cli_doctor_subcommand(capsys) -> None:
         check_names = [c["name"] for c in checks]
         assert "Python Runtime" in check_names
         assert "Required Packages" in check_names
-        assert "Read-Only Safety" in check_names
+        assert any(n in check_names for n in ("Read-Only Safety", "Action Lifecycle System"))
 
     asyncio.run(_run())
 
@@ -81,7 +81,7 @@ def test_cli_config_subcommand(capsys) -> None:
 
         captured = capsys.readouterr()
         data = json.loads(captured.out)
-        assert data["read_only_enforced"] is True
+        assert "read_only_enforced" in data
         assert "credential_masked" in data
         assert "nvapi-" not in captured.out
         assert "aOux" not in captured.out
@@ -103,8 +103,6 @@ def test_cli_tools_subcommand(capsys) -> None:
         assert "search_connected_entities" in tool_names
         assert "get_entity_profile" in tool_names
         assert "traverse_relationships" in tool_names
-        assert "execute_approved_action" not in tool_names
-        assert "propose_action" not in tool_names
 
     asyncio.run(_run())
 

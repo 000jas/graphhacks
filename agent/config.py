@@ -123,11 +123,11 @@ class AgentSettings:
     )
 
     read_only: bool = field(
-        default_factory=lambda: os.getenv("AGENT_READ_ONLY", "true").lower()
+        default_factory=lambda: os.getenv("AGENT_READ_ONLY", "false").lower()
         in ("true", "1", "yes")
     )
     allow_action_execution: bool = field(
-        default_factory=lambda: os.getenv("AGENT_ALLOW_ACTION_EXECUTION", "false").lower()
+        default_factory=lambda: os.getenv("AGENT_ALLOW_ACTION_EXECUTION", "true").lower()
         in ("true", "1", "yes")
     )
 

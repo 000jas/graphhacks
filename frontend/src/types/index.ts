@@ -78,6 +78,7 @@ export interface InvestigationResult {
   duration_seconds: number;
   provider_info?: Record<string, any>;
   unresolved_questions?: string[];
+  action_lifecycle?: any;
 }
 
 export interface GraphSchemaProfile {

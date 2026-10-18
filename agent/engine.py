@@ -56,10 +56,13 @@ You explore connected data in FalkorDB through read-only MCP tools to answer que
      * Or pass `tenant_graph="<graph_name>"` directly to any tool (`search_connected_entities`, `inspect_entity_neighbors`, `traverse_relationships`, `run_read_only_cypher_query`) to investigate a specific domain graph.
    - Synthesize the cross-domain findings across all domain graphs into a coherent end-to-end explanation without requiring data to be merged.
 
-5. Output Delivery:
+5. Output Delivery & Action Recommendations:
    - Deliver clear, direct answers tailored to the objective.
    - Outline the verified chain of evidence step-by-step with entity IDs, types, and relationship names.
    - Highlight any genuine data gaps, limitations, or unverified claims.
+   - Whenever you uncover duplicate records (such as duplicate person nodes or shared identifiers), financial anomalies, security vulnerabilities, excessive IAM roles, or policy issues, ALWAYS conclude your response with a dedicated section:
+     ### Recommended Actions
+     Specify the focal target entity ID, recommended action type (`MERGE_DUPLICATES`, `FREEZE_ACCOUNT`, `REVOKE_ACCESS`, `QUARANTINE_NODE`, or `UPDATE_STATUS`), and operational justification for human supervisor review.
 """
 
 

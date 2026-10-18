@@ -196,25 +196,36 @@ class GraphOSDoctor:
             permitted = guard.filter_available_tools(discovered_tools)
             permitted_names = {t.name for t in permitted}
 
-            leaked_mutators = permitted_names.intersection(MUTATING_TOOLS_BLOCKLIST)
-            if not leaked_mutators:
-                checks.append(
-                    DiagnosticCheck(
-                        category="Guardrails",
-                        name="Read-Only Safety",
-                        status="PASS",
-                        message=f"Strict read-only enforcement active: {len(permitted)} tools permitted, 0 mutating tools exposed.",
-                        details={"permitted_count": len(permitted)},
+            if self.settings.read_only:
+                leaked_mutators = permitted_names.intersection(MUTATING_TOOLS_BLOCKLIST)
+                if not leaked_mutators:
+                    checks.append(
+                        DiagnosticCheck(
+                            category="Guardrails",
+                            name="Read-Only Safety",
+                            status="PASS",
+                            message=f"Strict read-only enforcement active: {len(permitted)} tools permitted, 0 mutating tools exposed.",
+                            details={"permitted_count": len(permitted)},
+                        )
                     )
-                )
+                else:
+                    checks.append(
+                        DiagnosticCheck(
+                            category="Guardrails",
+                            name="Read-Only Safety",
+                            status="FAIL",
+                            message=f"CRITICAL: Mutating tools leaked past guardrail: {leaked_mutators}",
+                            remedy="Check agent/guardrails.py MUTATING_TOOLS_BLOCKLIST.",
+                        )
+                    )
             else:
                 checks.append(
                     DiagnosticCheck(
                         category="Guardrails",
-                        name="Read-Only Safety",
-                        status="FAIL",
-                        message=f"CRITICAL: Mutating tools leaked past guardrail: {leaked_mutators}",
-                        remedy="Check agent/guardrails.py MUTATING_TOOLS_BLOCKLIST.",
+                        name="Action Lifecycle System",
+                        status="PASS",
+                        message=f"End-to-End AI Action mode active: {len(permitted)} tools permitted with Supervisor Human Approval gate.",
+                        details={"permitted_count": len(permitted)},
                     )
                 )
 

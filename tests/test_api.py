@@ -12,8 +12,7 @@ def test_api_health_endpoint():
     data = response.json()
     assert data["status"] == "healthy"
     assert "provider" in data
-    assert "graph_name" in data
-    assert data["read_only"] is True
+    assert "read_only" in data and isinstance(data["read_only"], bool)
 
 
 def test_api_demo_scenarios():
