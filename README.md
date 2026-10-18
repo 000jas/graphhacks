@@ -1,393 +1,744 @@
-# 🌌 GraphOS — Evidence-Bound Graph AI Agent
+<p align="center">
+  <img src="https://img.shields.io/badge/Track%2001-Agents%20That%20Act%20on%20Connected%20Data-8B5CF6?style=for-the-badge" alt="Track 01" />
+  <img src="https://img.shields.io/badge/FalkorDB-Graph%20Database-E11D48?style=for-the-badge&logo=redis&logoColor=white" alt="FalkorDB" />
+  <img src="https://img.shields.io/badge/Next.js-React%2019-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js" />
+  <img src="https://img.shields.io/badge/FastAPI-Python%203.10%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/MCP-Model%20Context%20Protocol-3B82F6?style=for-the-badge&logo=anthropic&logoColor=white" alt="MCP" />
+  <img src="https://img.shields.io/badge/License-Apache%202.0-F59E0B?style=for-the-badge" alt="License" />
+</p>
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-green.svg)](https://modelcontextprotocol.io/)
-[![FalkorDB](https://img.shields.io/badge/FalkorDB-Cloud%20Graph-red.svg)](https://www.falkordb.com/)
-[![Tests](https://img.shields.io/badge/tests-42%20passed-brightgreen.svg)](tests/)
-[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)](LICENSE)
+# 🌌 GraphOS — AI-Powered Graph Intelligence
 
-**GraphOS** is a production-grade, CLI-first autonomous AI agent that investigates complex organizational, infrastructural, and dependency problems using connected graph data. 
+> **Autonomous investigation, evidence tracing, and controlled remediation over live knowledge graphs.**
 
-Powered by **FalkorDB Cloud** and the **Model Context Protocol (MCP)**, GraphOS navigates relationships between systems, teams, code, events, and policies to uncover root causes and deliver grounded, verifiable conclusions.
+---
 
-```text
-  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███████╗
- ██╔════╝ ██╔══██╗██╔══██╗██╔═══██╗██║  ██║██╔═══██╗██╔════╝
- ██║  ███╗██████╔╝███████║██████╔╝ ███████║██║   ██║███████╗
- ██║   ██║██╔══██╗██╔══██║██╔═══╝  ██╔══██║██║   ██║╚════██║
- ╚██████╔╝██║  ██║██║  ██║██║     ██║  ██║╚██████╔╝███████║
-  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+## 🏁 Hackathon Track
 
-  Connected-data intelligence from the terminal.
+> **Track 01 — Agents That Act on Connected Data**
+>
+> *Build an agent that uses the graph to decide and act. It could investigate fraud, triage security findings, or work through a codebase.*
 
-  Model       NVIDIA · openai/gpt-oss-20b
-  Graph       FalkorDB Cloud (Connected)
-  Tools       MCP (32 read-only / 37 available)
-  Mode        READ ONLY (Strict Guardrails)
+| Key Focus Area | How GraphOS Delivers It |
+| :--- | :--- |
+| **Multi-hop reasoning** | Agent autonomously traverses 3+ hop paths across accounts, transactions, devices, and IPs to uncover hidden syndicate patterns. |
+| **Graph queries and algorithms as agent tools** | 40 MCP tools including Cypher execution, PageRank, betweenness centrality, community detection, cycle detection, and connected components. |
+| **Tool selection through MCP** | Agent dynamically selects tools from the MCP catalog based on the investigation context — no hardcoded tool sequences. |
+| **Actions based on what the graph shows** | When evidence reaches a threshold, the agent proposes remediation (flag, suspend, escalate) based on graph-derived risk scores. |
+| **Explainable results** | Every finding cites the exact Cypher query and result set that produced it — fully auditable, zero hallucination. |
 
-graphos ❯ Why is the payments release delayed?
+---
+
+## 📌 1. Overview
+
+Most AI tools search flat documents or vector databases. They miss the hidden connections — shared devices, layered transaction chains, and multi-hop relationships that reveal the real story.
+
+**GraphOS** solves this by combining a live **FalkorDB** graph database with an autonomous AI agent that reasons directly over graph structures. It discovers schemas on the fly, executes multi-hop Cypher queries, traces evidence chains to their source, and proposes remediation actions — all with **Human-in-the-Loop** approval before any mutation touches the graph.
+
+The result: a full-stack intelligence platform where every finding is grounded in verifiable graph evidence, not hallucinated text.
+
+---
+
+## ✨ 2. Key Features
+
+| Feature | Description |
+| :--- | :--- |
+| **🔍 Dynamic Schema Discovery** | Automatically introspects node labels, relationship types, and properties from any connected FalkorDB graph — no hardcoded schemas. |
+| **🧠 Multi-Hop Reasoning** | AI agent traverses 3+ hop paths across accounts, transactions, devices, and IPs to uncover hidden patterns. |
+| **🔗 Cross-Graph Correlation** | Queries span multiple graphs simultaneously (domain data, code ASTs, audit trails) to find cross-domain links. |
+| **📋 Evidence Tracing** | Every claim is backed by the exact Cypher query and result set that produced it — fully auditable. |
+| **🛡️ Controlled Remediation** | Proposed actions (flag account, suspend transfers) go through policy simulation and require analyst approval before execution. |
+| **🕸️ Interactive Graph Explorer** | Physics-based HTML5 Canvas visualization with force simulation, clustering, path highlighting, and deep property inspection. |
+| **💬 Real-Time SSE Streaming** | Watch the agent think, call tools, and build evidence in real time through Server-Sent Events. |
+| **🔒 Authentication & History** | User sign-up/login with Argon2id hashing and persistent per-user chat history, all stored in FalkorDB. |
+| **🌲 Code AST Ingestion** | Tree-sitter parser supporting 8 languages (Python, JS, TS, Go, Rust, Java, C/C++, PHP) for codebase graph analysis. |
+| **💻 Dual Interface** | Production web app (Next.js) + interactive terminal CLI (`./graphos`). |
+
+---
+
+## 📸 3. Screenshots
+
+<img width="800" height="373" alt="Screenshot 2026-10-19 at 2 11 14 AM" src="https://github.com/user-attachments/assets/12de1bf8-d6e3-49af-bd83-649043b83331" />
+<img width="800" height="373" alt="Screenshot 2026-10-19 at 2 15 37 AM" src="https://github.com/user-attachments/assets/4189a5e3-8812-448a-b7b6-eed5a71f78b1" />
+<img width="800" height="373" alt="Screenshot 2026-10-19 at 2 12 17 AM" src="https://github.com/user-attachments/assets/1ed14019-3990-42ba-8eae-d944cc35a5f9" />
+<img width="800" height="373" alt="Screenshot 2026-10-19 at 2 20 48 AM" src="https://github.com/user-attachments/assets/abbdf9ca-55a3-45c8-b45c-dfac900980e1" />
+<img width="800" height="373" alt="Screenshot 2026-10-19 at 2 23 17 AM" src="https://github.com/user-attachments/assets/40c4fdec-e3d5-4fcd-9719-f9cec743d640" />
+
+---
+
+## 🏗️ 4. Architecture
+
+### High-Level System Flow
+
+```mermaid
+flowchart LR
+    User([User]) --> Frontend
+
+    subgraph Frontend["Next.js Frontend - Port 3000"]
+        UI[Workspace UI]
+        Graph[Graph Explorer]
+        Auth[Auth Modal]
+    end
+
+    subgraph Backend["FastAPI Backend - Port 8000"]
+        API[API Router]
+        Agent[AI Investigator]
+        AuthSvc[Auth Service]
+        History[Chat History]
+    end
+
+    subgraph MCP["MCP Tool Layer"]
+        Server[MCP Server]
+        Tools[37 Graph Tools]
+        Policy[Policy Engine]
+    end
+
+    subgraph DB["FalkorDB Cloud"]
+        Domain[(Domain Graphs)]
+        Code[(Code AST Graphs)]
+        AuthDB[(Auth Graph)]
+        HistDB[(History Graph)]
+    end
+
+    subgraph LLM["LLM Provider"]
+        Model["NVIDIA / OpenAI / Claude / Ollama"]
+    end
+
+    Frontend -->|REST + SSE| Backend
+    Agent -->|Tool Calls| MCP
+    Agent -->|Prompts| LLM
+    MCP -->|Cypher Queries| DB
+    AuthSvc --> AuthDB
+    History --> HistDB
+```
+
+### Investigation & Remediation Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Analyst
+    participant UI as Next.js UI
+    participant API as FastAPI
+    participant MCP as MCP Server
+    participant DB as FalkorDB
+
+    Analyst->>UI: Submit query
+    UI->>API: POST /api/investigate/stream SSE
+
+    rect rgb(240, 248, 255)
+        Note over API,DB: Autonomous Multi-Hop Traversal
+        API->>MCP: discover_schema
+        MCP->>DB: Introspect labels and relationships
+        DB-->>MCP: Schema metadata
+        MCP-->>API: Available tools and structure
+
+        API->>MCP: search_connected_entities
+        MCP->>DB: MATCH n-r1..3-m
+        DB-->>MCP: Connected nodes and paths
+        MCP-->>API: Evidence results
+
+        API->>MCP: run_read_only_cypher_query
+        MCP->>DB: Custom Cypher traversal
+        DB-->>MCP: Query results
+        MCP-->>API: Grounded findings
+    end
+
+    API-->>UI: Stream findings and action proposal
+
+    rect rgb(255, 248, 240)
+        Note over Analyst,UI: Human-in-the-Loop Approval
+        UI->>Analyst: Display findings and approval card
+        Analyst->>UI: Click Approve and Apply
+        UI->>API: POST /api/remediation/approve
+        API->>MCP: simulate_candidate_action
+        MCP-->>API: Policy verdict - Permitted
+        API->>DB: Execute mutation and create AuditRecord
+        API-->>UI: Action applied successfully
+    end
+```
+
+### Data Flow Diagram
+
+```mermaid
+flowchart TD
+    Q[User Question] --> SD[Schema Discovery]
+    SD --> PT[Plan Traversal]
+    PT --> CQ[Execute Cypher Queries]
+    CQ --> ET[Evidence Tracing]
+    ET --> RR{Risk Assessment}
+
+    RR -->|Low Risk| Report[Generate Report]
+    RR -->|High Risk| Propose[Propose Remediation]
+
+    Propose --> Simulate[Simulate Impact]
+    Simulate --> Approval{Analyst Approval?}
+
+    Approval -->|Approved| Mutate[Mutate Graph + Audit]
+    Approval -->|Rejected| Report
+
+    Mutate --> Report
+    Report --> Response[Stream Response to UI]
 ```
 
 ---
 
-## 💡 The Problem & The Mission
+## 🗂️ Graph Data Model
 
-### The Problem
-Conventional AI agents analyze isolated documents or flat keyword searches. They frequently:
-- **Miss critical dependencies** across systems, pull requests, tasks, and personnel.
-- **Hallucinate causation** from loose correlation without structural evidence.
-- **Lose context between sessions**, repeating the same queries from scratch.
-- **Fail to explain *why*** a conclusion was reached with verifiable audit trails.
+GraphOS uses a flexible entity-relationship graph model stored in FalkorDB. The schema is **dynamically discovered** at runtime — no hardcoded ontology.
 
-### The GraphOS Mission
-> **GraphOS uses connected data to understand a situation, reason across multi-hop relationships, decide what should happen, and explain why.**
+### Node Types (Entity Labels)
 
-It builds conclusions strictly from evidence and the links between that evidence—never from unsupported assumptions or guesses.
+| Label | Example Properties | Description |
+| :--- | :--- | :--- |
+| `Account` | `id`, `name`, `status`, `risk_score` | Financial accounts under investigation |
+| `Person` | `id`, `name`, `role`, `availability` | People connected to accounts, teams, or reviews |
+| `Transaction` | `id`, `amount`, `currency`, `timestamp` | Money transfers between accounts |
+| `Device` | `id`, `name`, `device_type` | Physical devices linked to accounts |
+| `IP` | `id`, `address`, `geo_location` | Network addresses used for logins |
+| `Service` | `id`, `name`, `status` | Microservices in the system |
+| `Repository` | `id`, `name`, `default_branch` | Code repositories |
+| `PullRequest` | `id`, `name`, `status` | Code changes under review |
+| `Team` | `id`, `name` | Organizational teams |
+| `Task` | `id`, `name`, `status`, `priority` | Work items (reviews, approvals) |
+| `Policy` | `id`, `name`, `requirement` | Governance rules and compliance policies |
+| `Incident` | `id`, `name`, `status`, `severity` | Tracked incidents |
+| `AuditRecord` | `execution_id`, `action`, `timestamp` | Immutable records of approved mutations |
+
+### Relationship Types
+
+| Relationship | Direction | Description |
+| :--- | :--- | :--- |
+| `OWNS` | Person -> Account | Person owns an account |
+| `TRANSFERS_TO` | Transaction -> Account | Money flows into an account |
+| `LOGGED_IN_FROM` | Account -> IP | Account accessed from IP |
+| `USES_DEVICE` | Account -> Device | Account linked to device |
+| `DEPENDS_ON` | Service -> Service | Service dependency chain |
+| `HAS_PULL_REQUEST` | Repository -> PullRequest | Repo contains a PR |
+| `ASSIGNED_TO` | Task -> Person | Task is assigned to a person |
+| `BLOCKED_BY` | Release -> PullRequest | Release blocked by pending PR |
+| `GOVERNED_BY` | Entity -> Policy | Entity subject to policy |
+| `TRACED_TO` | Incident -> Task | Incident root cause traced to task |
+| `HAS_MEMBER` | Team -> Person | Team membership |
+| `MODIFIES` | PullRequest -> File | PR changes a file |
+| `AUTHORED_BY` | PullRequest -> Person | PR author |
+
+### Entity-Relationship Diagram
+
+```mermaid
+erDiagram
+    Account ||--o{ Transaction : receives
+    Person ||--o{ Account : owns
+    Account ||--o{ Device : uses
+    Account ||--o{ IP : logged_in_from
+    Transaction }o--|| Account : transfers_to
+    Service ||--o{ Service : depends_on
+    Repository ||--o{ PullRequest : has_pr
+    PullRequest ||--|| Person : authored_by
+    Task ||--|| Person : assigned_to
+    Team ||--o{ Person : has_member
+    Incident ||--|| Task : traced_to
+    Policy ||--o{ Task : triggers
+```
 
 ---
 
-## 🏛️ Core Principles
+## 🔑 Key Cypher Queries
 
-1. **The Graph is Central**: FalkorDB Cloud is the foundation of investigation and reasoning—not a decorative visualizer. Graph traversal directly dictates agent decisions.
-2. **Evidence Before Confidence**: Every finding cites verified entity IDs, properties, and relationship chains (`Entity A` ➔ `Blocked By` ➔ `Entity B`). Missing data is reported as uncertainty rather than assumed away.
-3. **Genuine MCP Tool Discovery**: Discovers and executes 37 graph analysis tools dynamically via Model Context Protocol (`stdio` or Streamable HTTP).
-4. **Zero-Trust Guardrails**: Hardware-enforced read-only mode, parameter boundary checks, loop detection, and untrusted graph content boundary wrapping (`<untrusted_graph_data>`).
-5. **Provider-Agnostic LLM Engine**: Native support for **NVIDIA** (`openai/gpt-oss-20b`), **OpenAI** (`gpt-4o`), **Anthropic Claude** (`claude-3-5-sonnet`), local **Ollama**, and an offline **Mock Provider**.
-6. **Accountable & Interactive**: Delivers clear root-cause explanations with interactive numbered follow-up actions for terminal operators.
+These are the core graph queries the agent executes through MCP tools during investigations:
+
+### Schema Discovery
+```cypher
+-- Discover all node labels and counts
+MATCH (n) RETURN DISTINCT labels(n), count(n)
+
+-- Discover all relationship types
+MATCH ()-[r]->() RETURN DISTINCT type(r), count(r)
+
+-- Introspect properties per label
+MATCH (n) RETURN DISTINCT labels(n), keys(n) LIMIT 100
+```
+
+### Multi-Hop Traversal (Investigation Core)
+```cypher
+-- Traverse 3 hops from a target entity to find connected evidence
+MATCH path = (target {id: $entity_id})-[*1..3]-(connected)
+RETURN nodes(path), relationships(path)
+
+-- Find all accounts connected through shared devices
+MATCH (a1:Account)-[:USES_DEVICE]->(d:Device)<-[:USES_DEVICE]-(a2:Account)
+WHERE a1.id = $target_id AND a1 <> a2
+RETURN a2.id, a2.name, d.id AS shared_device
+
+-- Trace transaction flows to detect mule chains
+MATCH (source:Account)-[:TRANSFERS_TO*1..4]->(dest:Account)
+WHERE source.id = $source_id
+RETURN source.id, dest.id, dest.status, dest.risk_score
+```
+
+### Graph Algorithms (Agent Tools)
+```cypher
+-- PageRank: Find most influential nodes
+MATCH (source:Entity)-[r]->(target:Entity)
+RETURN source.id, source.name, target.id, target.name
+-- (PageRank computed in-application over this edge list)
+
+-- Connected Components: Identify clusters
+MATCH (n)-[r]-(m)
+RETURN n.id, m.id, type(r)
+-- (Union-Find algorithm applied in-application)
+
+-- Betweenness Centrality: Find bridge nodes
+MATCH path = shortestPath((a)-[*]-(b))
+WHERE a <> b
+RETURN nodes(path)
+```
+
+### Remediation (Post-Approval Mutations)
+```cypher
+-- Flag a suspicious account (only after human approval)
+MATCH (a:Account {id: $target_id})
+SET a.status = 'flagged', a.risk_score = $new_risk_score
+RETURN a
+
+-- Create immutable audit record
+CREATE (:AuditRecord {
+  execution_id: $exec_id,
+  action: $action_type,
+  target_id: $target_id,
+  approved_by: $user_email,
+  timestamp: datetime()
+})
+```
 
 ---
 
-## 🚀 Installation & Setup Guide
+## 🛠️ 5. Tech Stack
 
-### 📋 Prerequisites
-- **Python 3.10 – 3.13** (`python3 --version`)
-- **Git**
-- **FalkorDB Instance** (FalkorDB Cloud endpoint or local instance)
-- **LLM API Key** (NVIDIA AI Foundation, OpenAI, Anthropic, or local Ollama)
+| Layer | Technology |
+| :--- | :--- |
+| **Frontend** | Next.js 16, React 19, Tailwind CSS, TypeScript |
+| **Backend** | Python 3.10+, FastAPI, Uvicorn |
+| **AI Agent** | Custom multi-hop investigator with tool-calling loop |
+| **Tool Layer** | Model Context Protocol (MCP) — 37 registered tools |
+| **Database** | FalkorDB Cloud (Redis-compatible graph engine, Cypher queries) |
+| **LLM Providers** | NVIDIA AI (`gpt-oss-20b`), OpenAI (`gpt-4o`), Anthropic (`claude-3-5-sonnet`), Ollama (local) |
+| **Auth** | Argon2id password hashing, session cookies |
+| **Code Parsing** | Tree-sitter (8 languages) |
+| **Streaming** | Server-Sent Events (SSE) |
 
 ---
 
-### Option A: Standard Local Installation (Recommended)
+## 📁 6. Project Structure
 
-#### 1. Clone & Setup Environment
+```text
+graphhacks/
+│
+├── agent/                          # 🧠 AI Agent & Backend
+│   ├── api.py                      #    FastAPI server, SSE streaming, REST endpoints
+│   ├── engine.py                   #    Multi-hop investigation loop & synthesis
+│   ├── auth.py                     #    Authentication service (Argon2id, graphos_auth)
+│   ├── chat_history.py             #    Persistent chat history (graphos_history)
+│   ├── config.py                   #    Centralized configuration loader
+│   ├── models.py                   #    Pydantic request/response models
+│   ├── session.py                  #    Session tracking & audit logging
+│   ├── evidence.py                 #    Evidence quality scoring & validation
+│   ├── guardrails.py               #    Safety guardrails & query validation
+│   ├── schema_context.py           #    Dynamic schema context builder
+│   ├── mcp_client.py               #    MCP client connection manager
+│   ├── cli.py                      #    Terminal CLI commands
+│   ├── repl.py                     #    Interactive REPL mode
+│   ├── providers/                  #    LLM provider adapters (NVIDIA, OpenAI, Claude, Ollama)
+│   └── codeparser/                 #    Tree-sitter 8-language code AST parser
+│
+├── mcp_server/                     # 🔧 Model Context Protocol Server
+│   ├── server.py                   #    MCP server with 37 registered graph tools
+│   ├── db.py                       #    FalkorDB connection pool & safe query execution
+│   ├── schema_discovery.py         #    Runtime schema introspection
+│   ├── investigation.py            #    Graph traversal & entity search tools
+│   ├── intelligence.py             #    Pattern detection & anomaly analysis
+│   ├── algorithms.py               #    Graph algorithms (centrality, clustering, paths)
+│   ├── decision_memory.py          #    Action proposals, approval tokens & audit trails
+│   ├── counterfactual.py           #    Blast radius & impact simulation
+│   ├── policy.py                   #    Safety policy verdicts & guardrail rules
+│   └── evidence_quality.py         #    Evidence scoring & confidence assessment
+│
+├── frontend/                       # 🖥️ Next.js Web Application
+│   └── src/
+│       ├── app/                    #    App router (page.tsx, layout.tsx)
+│       ├── components/
+│       │   ├── Workspace.tsx       #    Investigation workspace & approval card
+│       │   ├── GraphExplorer.tsx   #    Canvas physics-based graph visualization
+│       │   ├── Hero.tsx            #    Landing page hero & CTA
+│       │   ├── Navigation.tsx      #    Header navigation & status badge
+│       │   ├── AuthModal.tsx       #    Sign-up / Login modal
+│       │   └── ImportDatasetModal.tsx  # Drag & drop dataset ingestion
+│       ├── lib/api.ts              #    API client & SSE streaming utilities
+│       └── types/index.ts          #    TypeScript interface definitions
+│
+├── tests/                          # 🧪 Test Suites
+│   ├── test_api.py                 #    API endpoint & integration tests
+│   └── test_auth_history_units.py  #    Auth & history unit tests
+│
+├── start.sh                        # 🚀 1-command startup script (backend + frontend)
+├── run.py                          # CLI code parser & database helper
+├── save_to_db.py                   # AST → FalkorDB ingestion script
+├── graphos                         # Executable CLI entrypoint
+├── requirements.txt                # Python dependencies
+├── pyproject.toml                  # Build & packaging config
+├── .env.example                    # Environment variable template
+├── Dockerfile                      # Container build definition
+├── docker-compose.yml              # Multi-service orchestration
+└── LICENSE                         # Apache 2.0 License
+```
+
+---
+
+## 🚀 7. Installation & Setup
+
+### Prerequisites
+
+| Requirement | Version | Check Command |
+| :--- | :--- | :--- |
+| Python | 3.10 – 3.13 | `python3 --version` |
+| Node.js | 18+ | `node --version` |
+| npm | 9+ | `npm --version` |
+| Git | Latest | `git --version` |
+| FalkorDB | Cloud or local | [falkordb.com](https://falkordb.com) |
+| LLM API Key | Any supported provider | See [Environment Variables](#-8-environment-variables) |
+
+### Quick Start (Recommended)
+
 ```bash
+# 1️⃣  Clone the repository
 git clone https://github.com/000jas/graphhacks.git
 cd graphhacks
 
-# Create and activate dedicated virtual environment
+# 2️⃣  Create Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-```
 
-#### 2. Install Dependencies & CLI
-```bash
-# Upgrade pip and install requirements
-pip install --upgrade pip
+# 3️⃣  Install Python dependencies
 pip install -r requirements.txt
 pip install -e .
 
-# Ensure CLI script is executable
-chmod +x graphos
-```
-*(Alternatively, simply run `make install`)*
+# 4️⃣  Install frontend dependencies
+cd frontend && npm install && cd ..
 
-#### 3. Configure Credentials
-Copy the template configuration file:
-```bash
+# 5️⃣  Configure environment variables
 cp .env.example .env
-```
-Edit `.env` with your FalkorDB Cloud and LLM provider credentials:
-```dotenv
-# --- FalkorDB Cloud Connection ---
-FALKORDB_HOST=your-falkordb-host.cloud
-FALKORDB_PORT=6379
-FALKORDB_USERNAME=default
-FALKORDB_PASSWORD=your_falkordb_password
-FALKORDB_SSL=false
-GRAPHOS_GRAPH_NAME=graphos_dev
+# ✏️  Edit .env with your FalkorDB and LLM credentials
 
-# --- LLM Provider Settings (Default: NVIDIA) ---
-LLM_PROVIDER=nvidia
+# 6️⃣  Launch both services (backend + frontend)
+./start.sh
+```
+
+**Access the application:**
+
+| Service | URL |
+| :--- | :--- |
+| 🖥️ Web App | [http://localhost:3000](http://localhost:3000) |
+| 📡 API Docs | [http://localhost:8000/docs](http://localhost:8000/docs) |
+
+**Stop:** Press `Ctrl+C` to terminate both services.
+
+### Manual Setup (Two Terminals)
+
+<details>
+<summary>Click to expand manual setup instructions</summary>
+
+**Terminal 1 — Backend:**
+```bash
+source .venv/bin/activate
+uvicorn agent.api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Terminal 2 — Frontend:**
+```bash
+cd frontend
+npm run dev
+```
+
+**Verify backend health:**
+```bash
+curl http://localhost:8000/api/health
+```
+
+</details>
+
+---
+
+## ⚙️ 8. Environment Variables
+
+Create a `.env` file in the project root (use `.env.example` as a template):
+
+```dotenv
+# ─── FalkorDB Cloud ──────────────────────────────────────────
+FALKORDB_HOST=your-falkordb-host.cloud
+FALKORDB_PORT=54637
+FALKORDB_USERNAME=falkordb
+FALKORDB_PASSWORD=your-falkordb-password
+FALKORDB_SSL=false
+GRAPHOS_GRAPH_NAME=your_graph_name
+
+# ─── LLM Provider ────────────────────────────────────────────
+LLM_PROVIDER=nvidia                          # nvidia | openai | anthropic | ollama
 LLM_MODEL=openai/gpt-oss-20b
 LLM_API_BASE=https://integrate.api.nvidia.com/v1
-NVIDIA_API_KEY=nvapi-your-nvidia-api-key
+NVIDIA_API_KEY=your-nvidia-api-key
 
-# --- Safety Guardrails ---
-AGENT_READ_ONLY=true
+# Alternative providers (uncomment one):
+# OPENAI_API_KEY=your-openai-api-key
+# ANTHROPIC_API_KEY=your-anthropic-api-key
+# OLLAMA_BASE_URL=http://localhost:11434
+
+# ─── MCP Transport ───────────────────────────────────────────
+MCP_TRANSPORT=stdio
+MCP_SERVER_COMMAND=python
+MCP_SERVER_ARGS=mcp_server/server.py
+MCP_SERVER_CWD=.
+
+# ─── Agent Configuration ─────────────────────────────────────
 AGENT_MAX_ITERATIONS=10
 AGENT_MAX_TOOL_CALLS=20
+AGENT_TOOL_TIMEOUT_SECONDS=30
+
+# ─── Safety Guardrails ───────────────────────────────────────
+AGENT_READ_ONLY=true
+AGENT_ALLOW_ACTION_EXECUTION=false
 ```
 
-#### 4. Verify Installation
-Run the automated system diagnostics check:
-```bash
-./graphos doctor
-# or: make doctor
-```
-Run the automated test suite (42 tests):
-```bash
-make test
-# or: pytest tests
-```
+> ⚠️ **Never commit real secrets.** The `.env` file is in `.gitignore`. Use `.env.example` for reference.
 
 ---
 
-### Option B: Docker Container Installation
+## 🎯 9. Usage
 
-GraphOS is fully containerized with a production multi-stage `Dockerfile` and `docker-compose.yml`:
+### Step-by-Step Workflow
 
-```bash
-# 1. Configure environment
-cp .env.example .env
-
-# 2. Build the Docker container
-make docker-build
-# or: docker compose build
-
-# 3. Run system diagnostics inside Docker
-docker compose run --rm agent doctor
-
-# 4. Launch the interactive terminal agent
-make docker-run
-# or: docker compose run --rm agent
-
-# 5. Launch the Streamlit Analytics Dashboard (http://localhost:8501)
-make docker-dashboard
-# or: docker compose up -d dashboard
+```mermaid
+flowchart LR
+    A["1. Sign Up / Login"] --> B["2. Select Graph"]
+    B --> C["3. Ask a Question"]
+    C --> D["4. Agent Investigates"]
+    D --> E["5. Review Evidence"]
+    E --> F{"6. Action Proposed?"}
+    F -->|Yes| G["7. Human Approval"]
+    G --> H["8. Changes Written to DB"]
+    F -->|No| I["Report Generated"]
 ```
 
----
+1. **Sign Up / Login** — Create an account or sign in with your registered email.
+2. **Select a Graph** — Choose a connected FalkorDB graph from the dropdown (e.g. `swiftpay_unified`).
+3. **Ask a Question** — Type your investigation query in natural language.
+4. **Agent Investigates** — The AI autonomously traverses multi-hop paths across the graph in real time (visible via SSE streaming).
+5. **Review Evidence** — Examine grounded findings, executed Cypher queries, and the visual graph explorer canvas.
+6. **Action Proposed?** — If the agent detects an issue and recommends remediation (e.g. flag an account, suspend transfers), it presents an **approval card** to the analyst.
+7. **Human Approval (Required)** — The agent **never** mutates the database on its own. The analyst must explicitly click **"Approve & Apply Changes to Graph"** or reject the proposal.
+8. **Changes Written to DB** — Once approved, the mutation is executed directly in **FalkorDB Cloud** and an immutable `AuditRecord` node is created, permanently logging *who* approved *what* action and *when*.
 
-## 🕹️ Usage Modes
+> 🛡️ **Zero autonomous writes.** Every graph mutation requires explicit human approval. Rejected proposals are discarded — nothing touches the database.
 
-### Mode 1: Interactive Terminal Agent (REPL)
+### Human-in-the-Loop Approval Flow
 
-Launch the interactive prompt session:
+```mermaid
+flowchart TD
+    Finding["Agent Finds Anomaly"] --> Simulate["Simulate Impact - Blast Radius Check"]
+    Simulate --> Policy{"Policy Verdict"}
+
+    Policy -->|Permitted| Card["Display Approval Card"]
+    Policy -->|Blocked| Deny["Action Blocked by Policy"]
+
+    Card --> Decision{"Analyst Decision"}
+    Decision -->|Approve| Write["Mutate FalkorDB"]
+    Decision -->|Reject| Skip["No Changes Made"]
+
+    Write --> Audit["Create AuditRecord Node"]
+    Audit --> Refresh["Graph Explorer Updates Live"]
+```
+
+**What gets written to FalkorDB on approval:**
+- **Target node is mutated** — e.g. `Account A-800` gets `status = 'flagged'`, `risk_score = 0.95`
+- **AuditRecord node is created** — immutable record with `execution_id`, `action_type`, `target_id`, `approved_by`, and `timestamp`
+- **Graph Explorer refreshes** — the affected node visually updates in real time (e.g. turns red for flagged)
+
+### Import Your Own Data
+
 ```bash
+# Parse a codebase into an AST graph
+python3 run.py /path/to/your/repo
+
+# Ingest the parsed output into FalkorDB
+python3 save_to_db.py output.json --graph your_graph_name
+```
+
+Or use the **Import Dataset** button in the web UI to drag-and-drop CSV/JSON files directly.
+
+### CLI Usage
+
+```bash
+# Interactive REPL
 ./graphos
+
+# One-shot query
+./graphos ask "Investigate Account A-800 transaction flows"
+
+# System diagnostics
+./graphos doctor
+
+# Check connection status
+./graphos status
+
+# List all MCP tools
+./graphos tools
 ```
 
-```text
-graphos ❯ Why is the payments release delayed?
+---
 
-  ◈ Investigating objective: Why is the payments release delayed?
-  ◈ Reasoning over evidence graph (step 1/10)...
-  ◈ Calling MCP tool: search_connected_entities (query='payments', kind='Release')
-  ◈ Calling MCP tool: traverse_relationships (entity_id='release-payments-2026-10', depth=2)
-  ◈ Calling MCP tool: get_entity_profile (entity_id='task-code-review-482')
-  ◈ Calling MCP tool: get_entity_profile (entity_id='person-liam-patel')
-  ✓ Investigation completed (28.9s, 7 tool calls)
+## 🔎 10. Example Investigation
 
-🎯 Root Cause Summary
-The Payments Release is delayed because the code-review task for PR #482 is stalled:
-its assigned reviewer, Liam Patel, is on leave. PR #482 cannot merge without review,
-keeping the production release blocked.
+**Query:**
 
-🔗 Chain of Evidence
- Payments Release October 2026
-    └─ BLOCKED_BY ── PR #482: Update payments SDK
-           └─ BLOCKED_BY ── Review PR #482 (Task)
-                  └─ ASSIGNED_TO ── Liam Patel (Person)
-                         └─ availability: on_leave
+> *"Investigate Account A-800: check transaction flows, detect any mule syndicate activity, and recommend remediation."*
 
-💡 Key Contributing Facts
- • Liam Patel – assigned reviewer for the code review, status: on_leave.
- • Review PR #482 – status: blocked; cannot complete until reviewer returns.
- • Security review task – open and awaiting completion.
+**What GraphOS does behind the scenes:**
 
-⚡ Suggested Next Actions
-[1] Reassign the code-review task to an available reviewer (e.g. Ravi Kulkarni or Maya Chen).
-[2] Prioritize the security review task with Priya Shah to avoid subsequent delay.
-[3] Assess blast radius on checkout service if PR #482 is fast-tracked.
+```mermaid
+flowchart TD
+    Start["Query: Investigate A-800"] --> Step1
 
-╭──────────────────────── 🔗 Verified Dependency Chain ────────────────────────╮
-│   • release-payments-2026-10 ➔ Payments Release October 2026 ➔ PR #482       │
-│   • release-payments-2026-10 ➔ PR #482 ➔ Review PR #482 ➔ Liam Patel (on_leave)│
-╰──────────────────────────────────────────────────────────────────────────────╯
-  ⚡ Verified in 28.9s · 7 tool calls · 34 entities grounded · nvidia (openai/gpt-oss-20b)
+    Step1["1. Inspect Account A-800"]
+    Step1 --> Step2
 
-👉 Interactive Next Step: Choose [1-3], ask a follow-up, or press Enter to finish: 
+    Step2["2. Traverse 3 Hops - Discover TX-801-MULE"]
+    Step2 --> Step3
+
+    Step3["3. Cross-Correlate - Shared Device D-300"]
+    Step3 --> Step4
+
+    Step4["4. Risk Escalation 0.03 to 0.95"]
+    Step4 --> Step5
+
+    Step5["5. Propose Remediation"]
+    Step5 --> Step6
+
+    Step6{"6. Analyst Approves?"}
+    Step6 -->|Yes| Step7["Mutate Graph and Create AuditRecord"]
+    Step6 -->|No| Step8["Report Only - No changes made"]
 ```
 
-### Mode 2: Direct One-Shot Investigation
+**Key findings the agent returns:**
+- 💰 High-velocity inflow `TX-801-MULE` (₹45,000) from flagged source
+- 📱 Shared mobile device `D-300` linked to known mule accounts
+- 🌐 Concurrent proxy logins from suspicious IP `10.0.4.7`
+- 📈 Risk score escalated from `0.03` → `0.95`
+- ✅ After approval: Account flagged in FalkorDB with immutable audit trail
 
-Execute single queries for scripts, workflows, or terminal automation:
+---
+
+## 🔒 11. Security
+
+### Authentication & Access Control
+
+```mermaid
+flowchart LR
+    User([User]) --> Signup["Sign Up\n(Argon2id Hash)"]
+    Signup --> AuthGraph[("graphos_auth\nFalkorDB")]
+
+    User --> Login["Login\n(Email + Password)"]
+    Login --> Verify["Verify Hash"]
+    AuthGraph --> Verify
+    Verify --> Session["Session Cookie"]
+    Session --> API["Authenticated\nAPI Access"]
+```
+
+| Security Layer | Implementation |
+| :--- | :--- |
+| **Password Hashing** | Argon2id (memory-hard, GPU-resistant) |
+| **Session Management** | Secure HTTP-only session cookies |
+| **Tenant Isolation** | Per-user chat history in isolated graph nodes |
+| **Read-Only Default** | Agent operates in read-only mode by default (`AGENT_READ_ONLY=true`) |
+| **Mutation Approval** | All write operations require explicit Human-in-the-Loop approval |
+| **Policy Simulation** | Actions are simulated for blast radius before execution |
+| **Audit Trail** | Every approved action creates an immutable `AuditRecord` node in FalkorDB |
+| **Secret Management** | Credentials never committed; `.env` is gitignored |
+| **Query Guardrails** | Cypher queries validated against injection patterns before execution |
+
+---
+
+## 📡 12. API Reference
+
+| Endpoint | Method | Description |
+| :--- | :---: | :--- |
+| `/api/health` | `GET` | Health check, DB connection, and active model status |
+| `/api/graphs` | `GET` | List available FalkorDB graphs |
+| `/api/schema/{graph}` | `GET` | Introspect graph schema (labels, relationships, properties) |
+| `/api/auth/signup` | `POST` | Register new user (Argon2id hashing) |
+| `/api/auth/login` | `POST` | Authenticate user and set session cookie |
+| `/api/auth/me` | `GET` | Get current authenticated user |
+| `/api/auth/logout` | `POST` | Revoke session and clear cookie |
+| `/api/conversations` | `GET` | List user's conversation history |
+| `/api/conversations` | `POST` | Create new conversation thread |
+| `/api/investigate/stream` | `POST` | SSE streaming investigation engine |
+| `/api/remediation/approve` | `POST` | Execute approved action with audit trail |
+| `/api/ingest/code-json` | `POST` | Ingest parsed AST JSON into FalkorDB |
+| `/api/ingest/csv` | `POST` | Ingest CSV entities and relationships |
+
+---
+
+## 🖥️ Local Setup Instructions
+
+> This project runs **fully locally**. No cloud deployment is required.
+
 ```bash
-# Human-readable report
-./graphos ask "Why is the payments release delayed?"
+# 1. Clone
+git clone https://github.com/000jas/graphhacks.git
+cd graphhacks
 
-# Machine-readable JSON for CI/CD pipelines
-./graphos ask "Why is the payments release delayed?" --json
+# 2. Python environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+
+# 3. Frontend
+cd frontend && npm install && cd ..
+
+# 4. Configure
+cp .env.example .env
+# Edit .env with your FalkorDB Cloud and LLM API credentials
+
+# 5. Launch (single command)
+./start.sh
+
+# Backend: http://localhost:8000
+# Frontend: http://localhost:3000
+# API Docs: http://localhost:8000/docs
 ```
 
-### Mode 3: Visual Knowledge Graph Dashboard
-
-Launch the Streamlit analytics interface:
-```bash
-make dashboard
-# or: streamlit run dashboard/app.py
-```
-Open **http://localhost:8501** to inspect topological metrics, graph algorithms, and entity blast radiuses visually.
+**Requirements:** Python 3.10+, Node.js 18+, FalkorDB instance, LLM API key (NVIDIA/OpenAI/Anthropic/Ollama).
 
 ---
 
-## 🩺 Diagnostic Subcommands
+## 👥 Contributors & License
 
-| Command | Description |
-| :--- | :--- |
-| `./graphos doctor` | Comprehensive health check (Python, dependencies, FalkorDB, MCP, credentials, guardrails) |
-| `./graphos status` | Live status of model, cloud graph, transport, and discovered tools |
-| `./graphos config` | Safe runtime configuration report with all secrets and passwords masked |
-| `./graphos tools` | Catalog of all 32 discovered read-only MCP tools and parameter schemas |
-| `./graphos schema` | Discovered runtime schema, topological counts, and label catalog |
-| `./graphos refresh`| Force immediate cache invalidation and re-discovery of FalkorDB graph schema |
+### Contributors
 
----
+<table>
+  <tr>
+    <td align="center"><b>Jheel Pashine</b><br/>Ojas Dhapse</td>
+  </tr>
+</table>
 
-## 💻 Supported REPL Slash Commands
+### License
 
-Within `./graphos`, use slash commands to inspect state dynamically:
+This project is distributed under the **Apache License 2.0**.
 
-| Slash Command | Action |
-| :--- | :--- |
-| `/help` | Show command reference guide and example queries |
-| `/schema` | Inspect discovered node kinds, relationship types, and properties |
-| `/status` | View live provider, MCP server, and database connection status |
-| `/doctor` | Run deep diagnostic health checks in-session |
-| `/config` | Display active runtime configuration with credentials redacted |
-| `/tools` | List all exposed MCP tools and schemas |
-| `/model [provider] [model]` | Dynamically switch LLM provider and model without restarting |
-| `/history` | View turns, durations, and evidence metrics in current session |
-| `/new`, `/reset` | Clear conversational context and start a fresh investigation |
-| `/clear` | Clear terminal screen and redisplay status banner |
-| `/exit`, `/quit` | Cleanly terminate session (or press `Ctrl+D`) |
+See the [`LICENSE`](LICENSE) file for full details.
 
 ---
 
-## ⚙️ Provider Configuration Matrix
-
-GraphOS is provider-agnostic. Switch providers via `.env`, the `--provider` flag, or `/model` in the REPL:
-
-```bash
-# NVIDIA AI Foundation (Default)
-./graphos --provider nvidia --model openai/gpt-oss-20b
-
-# OpenAI
-./graphos --provider openai --model gpt-4o
-
-# Anthropic Claude
-./graphos --provider anthropic --model claude-3-5-sonnet-20241022
-
-# Local Ollama
-./graphos --provider ollama --model qwen2.5:7b
-
-# Offline / Hermetic Demonstration (No API key needed)
-./graphos --provider mock
-```
-
----
-
-## 🛡️ Zero-Trust Guardrail Architecture
-
-GraphOS strictly enforces safety and security at the application boundary:
-
-1. **Read-Only Allowlist**: Strips all mutating tools (`propose_action`, `execute_approved_action`, `record_outcome`) from the model's catalog before prompt construction and blocks them at execution time.
-2. **Tool Name Sanitization**: Cleans chat template tokens (e.g. `<|channel|>commentary`) to ensure strict allowlist matching.
-3. **Parameter Boundary Validation**: Enforces safety limits on traversal depth (`1 <= depth <= 6`), entity limits (`1 <= limit <= 50`), and query character lengths.
-4. **Anti-Repetition Circuit Breaker**: Halts recurring tool loops with identical parameters.
-5. **Prompt Injection Isolation**: Wraps retrieved graph data in `<untrusted_graph_data>` tags to prevent external content from overriding instructions.
-6. **Secret Scrubbing**: API keys, passwords, and tokens are automatically masked in logs, diagnostics, and session storage.
-
----
-
-## 📦 Discovered MCP Toolset (37 Tools)
-
-GraphOS connects to FalkorDB via MCP and discovers 37 composable graph tools:
-
-| Category | Tools Included |
-| :--- | :--- |
-| **Core Traversal & Search** | `search_connected_entities`, `get_entity_profile`, `traverse_relationships`, `find_shortest_evidence_path`, `retrieve_source_documents`, `check_policy`, `simulate_action` |
-| **Topological Intelligence** | `discover_relationship_patterns`, `find_common_neighbors`, `find_alternative_paths`, `detect_critical_dependencies`, `detect_communities`, `detect_graph_anomalies`, `analyze_reachability`, `compare_connectivity` |
-| **Investigation & Clustering**| `search_entities_advanced`, `compare_entities`, `investigate_entity_cluster`, `extract_investigation_subgraph`, `compare_evidence_paths`, `batch_get_entities`, `generate_investigation_summary` |
-| **Centrality & Algorithms** | `run_graph_algorithm` (PageRank, Betweenness, Closeness, Degree, Connected Components, Cycle Detection) |
-| **Risk & Counterfactuals** | `analyze_graph_impact`, `assess_change_risk_and_impact`, `evaluate_candidate_actions` |
-| **Evidence & Temporal Graph** | `evaluate_evidence_quality`, `detect_conflicting_evidence`, `inspect_temporal_graph` |
-| **Schema & Memory** | `discover_graph_schema`, `query_decision_memory`, `run_read_only_cypher_query` |
-
----
-
-## 🏗️ Architecture
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Terminal CLI Entry Points                       │
-│  - Interactive REPL: `graphos`                                         │
-│  - One-shot command: `graphos ask "..."`                               │
-│  - Diagnostics: `graphos doctor`, `status`, `config`, `tools`          │
-│  - Scripting options: `--json`, `--quiet`, `--verbose`, `--no-color`   │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Session Manager (`agent/session.py`)            │
-│  - Multi-turn conversation state & context management                  │
-│  - Sanitized local session persistence (`~/.graphos/sessions`)         │
-│  - Turn-level metrics & evidence accumulation                          │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Agent Engine (`agent/engine.py`)                │
-│  - Provider-agnostic investigation loop & plan synthesis               │
-│  - Dynamic runtime graph schema discovery & prompt injection           │
-│  - Zero-Trust Guardrails & Read-Only allowlist enforcement             │
-│  - Anti-loop circuit breaker & untrusted data wrapping                 │
-└───────────────────┬────────────────────────────────┬───────────────────┘
-                    │                                │
-                    ▼                                ▼
-┌──────────────────────────────────────┐  ┌──────────────────────────────┐
-│  LLM Provider Adapters               │  │  MCP Client (`mcp_client.py`)│
-│  - NVIDIA (openai/gpt-oss-20b)       │  │  - stdio or streamable_http  │
-│  - OpenAI (gpt-4o)                   │  │  - Dynamic tool discovery    │
-│  - Anthropic (claude-3-5-sonnet)     │  │  - Robust timeout handling   │
-│  - Ollama (local inference)          │  └──────────────┬───────────────┘
-│  - Mock (deterministic offline test) │                 │
-└──────────────────────────────────────┘                 ▼
-                                          ┌──────────────────────────────┐
-                                          │  GraphOS MCP Server          │
-                                          │  (`mcp_server/server.py`)    │
-                                          │  (37 composable graph tools) │
-                                          └──────────────┬───────────────┘
-                                                         │
-                                                         ▼
-                                          ┌──────────────────────────────┐
-                                          │  FalkorDB Cloud Graph Engine │
-                                          │  (Live Knowledge Graph)      │
-                                          └──────────────────────────────┘
-```
-
----
-
-## 🛠️ Developer Reference (`Makefile`)
-
-| Command | Action |
-| :--- | :--- |
-| `make install` | Install project dependencies and editable package |
-| `make test` | Run complete automated unit and integration test suite (42 tests) |
-| `make doctor` | Execute full system health audit and diagnostic report |
-| `make status` | Display live connection status of provider, graph, and MCP |
-| `make run` | Launch interactive terminal REPL (`./graphos`) |
-| `make ask Q="..."` | Run one-shot investigation query |
-| `make dashboard` | Launch Streamlit Analytics Dashboard on `http://localhost:8501` |
-| `make docker-build` | Build `graphos:latest` Docker image |
-| `make docker-run` | Run interactive terminal agent inside Docker |
-| `make docker-dashboard` | Run Streamlit dashboard container |
-| `make docker-down` | Stop running Docker containers |
-| `make clean` | Clean up `__pycache__`, pytest caches, and temporary files |
-
----
-
-## 📄 License
-
-Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE) for details.
+<p align="center">
+  <b>Track 01: Agents That Act on Connected Data</b><br/>
+  Built with FalkorDB · MCP · Next.js · FastAPI
+</p>
