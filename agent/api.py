@@ -106,21 +106,39 @@ DEMO_SCENARIOS: dict[str, Any] = {
         "scenario_id": "fraud",
         "title": "Cross-Border Mule Network & Sybil Device Linking",
         "objective": "Investigate suspicious transactions and find connected entities or transaction paths that may be relevant.",
-        "final_answer": """### Executive Summary: High-Risk Financial Sybil Ring Detected
+        "final_answer": """### 1. Investigation Summary
+A high-velocity mule laundering ring has been identified operating across 3 connected accounts and a shared compromised hardware fingerprint, routing illicit cross-border transfers through Tor infrastructure to destination beneficiary wallet `acc-target-902`.
 
-Based on verified multi-hop transaction evidence across the knowledge graph, account `acc-mule-881` connects to `acc-target-902` through a layered 3-hop transfer chain and a shared hardware fingerprint:
+### 2. Evidence & Connected Entities
+- **Source Account**: `acc-mule-881` (status: `flagged`, balance: $1,240 USD, jurisdiction: KY)
+- **Intermediary Account**: `acc-intermediary-440` (status: `active`, balance: $600 USD, jurisdiction: PA)
+- **Beneficiary Wallet**: `acc-target-902` (status: `watch_list`, balance: $95,200 USD, jurisdiction: CH)
+- **Shared Hardware Device**: `device-uuid-9918` (status: `compromised`, Linux x86_64, Headless Chrome)
+- **Anonymizer Gateway**: `network-tor-exit-12` (status: `anonymized`, IP: `185.220.101.5`, AS200052)
+- **Verified Transaction Chain**: `acc-mule-881` -> `TRANSFERS_TO` ($48,500) -> `acc-intermediary-440` -> `TRANSFERS_TO` ($47,900) -> `acc-target-902` within 4 minutes.
 
-1. **Transaction Laundering Chain**:
-   - `acc-mule-881` (`Flagged: Suspicious High-Velocity`) transferred **$48,500 USD** to `acc-intermediary-440`.
-   - `acc-intermediary-440` subsequently dispersed **$47,900 USD** to destination `acc-target-902` within 4 minutes.
-2. **Device Hardware Fingerprint Association**:
-   - Both `acc-mule-881` and `acc-intermediary-440` share physical device fingerprint `device-uuid-9918`.
-   - `device-uuid-9918` routed sessions through anonymous endpoint `network-tor-exit-12`.
+### 3. Reasoning / Investigation Steps
+1. Initial search on `acc-mule-881` flagged extreme transfer velocity exceeding historical baseline by 320%.
+2. Traversed multi-hop relationships (`depth=3`) discovering rapid onward transfer of $47,900 to `acc-target-902` via intermediary `acc-intermediary-440`.
+3. Inspected device relationship layer revealing that both accounts authenticate from the identical hardware fingerprint `device-uuid-9918`, proving unified beneficial ownership and Sybil behavior.
+4. Traced hardware egress network path to exit relay `network-tor-exit-12`.
 
-#### Verified Evidence & Grounded Facts:
-- All transaction records and timestamps verified from transaction logs.
-- Sybil hardware clustering confirmed via distinct network relationship paths.
-- Recommended Action: Freeze accounts `acc-mule-881` and `acc-intermediary-440` pending AML SAR filing.""",
+### 4. Risk Assessment
+- **Risk Level**: `CRITICAL` (Score: 0.94 / 1.0)
+- **Contributing Factors**: Rapid layered fund dispersion (< 4 min window), shared hardware UUID between ostensibly unrelated accounts, and Tor exit routing.
+- **Uncertainties**: Off-chain identity behind wallet `acc-target-902` requires legal disclosure from Swiss financial partner.
+
+### 5. Recommended Actions
+- Freeze accounts `acc-mule-881` and `acc-intermediary-440` immediately to prevent further exfiltration.
+- Quarantine hardware device `device-uuid-9918` across session authorization layer.
+- Submit AML Suspicious Activity Report (SAR) citing Sybil transaction cluster.
+*(Sensitive remediation actions require human supervisor authorization before execution).*
+
+### 6. Sources & Execution Details
+- **Graphs Queried**: `fraud_swiftpay`, `swiftpay_unified`
+- **Tools Invoked**: `search_connected_entities`, `traverse_relationships`, `inspect_entity_neighbors`
+- **Provenance Verification Rate**: 100% verified against immutable transaction ledger
+- **Status**: Completed successfully""",
         "evidence_summary": {
             "total_entities_verified": 5,
             "unique_entities_count": 5,
@@ -206,21 +224,39 @@ Based on verified multi-hop transaction evidence across the knowledge graph, acc
         "scenario_id": "security",
         "title": "Cloud Infrastructure Vulnerability & IAM Blast Radius",
         "objective": "Investigate these security findings, trace their connected dependencies, and identify which findings warrant attention.",
-        "final_answer": """### Executive Summary: Critical Attack Path to Production Database
+        "final_answer": """### 1. Investigation Summary
+A critical attack path connects public-facing gateway `svc-auth-core` via vulnerability `cve-2026-4412` and overprivileged IAM role `role-auth-service-admin` directly to customer credentials database `db-user-credentials-primary`, placing 1.2M credential records at immediate risk of exfiltration.
 
-Investigation of Security Finding `cve-2026-4412` reveals a verified privilege escalation path that directly reaches the primary customer credentials database:
+### 2. Evidence & Connected Entities
+- **Vulnerability**: `cve-2026-4412` (status: `critical`, CVSS: 9.8, CWE-94: Remote Code Execution, vector: Network)
+- **Compromised Ingress Service**: `svc-auth-core` (status: `vulnerable`, Node 20, public ingress, Tier-1)
+- **Overprivileged IAM Role**: `role-auth-service-admin` (status: `overprivileged`, policy: `AdministratorAccess`, wildcard `iam:*` and `rds:*`)
+- **Target Database Instance**: `db-user-credentials-primary` (status: `active`, PostgreSQL 16, multi-AZ, 1.24M records)
+- **Deployment Region**: `region-eu-central-1` (Frankfurt, AWS, GDPR-Tier1)
+- **Verified Attack Path**: `cve-2026-4412` -> `AFFECTS` -> `svc-auth-core` -> `ASSUMES_ROLE` -> `role-auth-service-admin` -> `ACCESSES` -> `db-user-credentials-primary`.
 
-1. **Vulnerability Assessment**:
-   - `cve-2026-4412` (`CVSS 9.8 Critical: Remote Code Execution`) affects public gateway `svc-auth-core`.
-2. **Identity Privilege Escalation**:
-   - `svc-auth-core` is bound to IAM role `role-auth-service-admin`, which possesses excessive wildcard permissions `iam:*` and `rds:*`.
-3. **Database Exposure**:
-   - IAM role allows unauthenticated read replication of `db-user-credentials-primary` located in `region-eu-central-1`.
+### 3. Reasoning / Investigation Steps
+1. Discovered CVE alert `cve-2026-4412` and inspected impacted host microservices.
+2. Verified that `svc-auth-core` is internet-facing and bound to IAM role `role-auth-service-admin`.
+3. Traversed outgoing IAM policy grants, uncovering unconstrained wildcard replication privileges on database instance `db-user-credentials-primary`.
+4. Traced dependent downstream consumers (`svc-billing-api`, `svc-order-processing`) to calculate complete blast radius.
 
-#### Verified Blast Radius:
-- **3 Downstream Microservices**: `svc-billing-api`, `svc-order-processing`, `svc-notification-core`.
-- **Primary Data Store**: 1.2M hashed user credentials exposed to potential exfiltration.
-- **Recommended Action**: Rotate IAM role session credentials and immediately revoke wildcard database access for `role-auth-service-admin`.""",
+### 4. Risk Assessment
+- **Risk Level**: `CRITICAL` (CVSS Score: 9.8 / 10.0)
+- **Contributing Factors**: Network-exploitable RCE without authentication, coupled with Administrator wildcard IAM privileges spanning production customer data stores.
+- **Blast Radius**: 3 downstream microservices, 1.24M credential hashes, and compliance breach risk under GDPR.
+
+### 5. Recommended Actions
+- Rotate active session credentials for IAM role `role-auth-service-admin`.
+- Revoke wildcard database access policies, replacing them with least-privilege scoped RDS policies.
+- Apply security patch to upgrade `svc-auth-core` runtime dependency.
+*(Consequential security modifications require human supervisor authorization before execution).*
+
+### 6. Sources & Execution Details
+- **Graphs Queried**: `security_swiftpay`, `swiftpay_unified`
+- **Tools Invoked**: `get_entity_profile`, `inspect_entity_neighbors`, `traverse_relationships`
+- **Provenance Verification Rate**: 100% verified against cloud provider IAM schema
+- **Status**: Completed successfully""",
         "evidence_summary": {
             "total_entities_verified": 5,
             "unique_entities_count": 5,
@@ -298,22 +334,41 @@ Investigation of Security Finding `cve-2026-4412` reveals a verified privilege e
         "scenario_id": "codebase",
         "title": "Software Release Dependency Bottleneck & Leave Absence",
         "objective": "Trace dependencies related to this component and identify the possible impact of a proposed change.",
-        "final_answer": """### Executive Summary: Release Bottleneck Resolved via Policy Reassignment
+        "final_answer": """### 1. Investigation Summary
+The **Payments Release October 2026** (`release-payments-2026-10`) is delayed because required Pull Request `#482` (`pr-482`) is blocked by review task `task-code-review-482` assigned to engineer `person-liam-patel`, who is currently on scheduled leave.
 
-Multi-hop dependency analysis of release `release-payments-2026-10` pinpoints an unresolved review bottleneck on Pull Request `#482`:
+### 2. Evidence & Connected Entities
+- **Release Target**: `release-payments-2026-10` (status: `delayed`, target: `2026-10-20`, tier: Production)
+- **Impacted Microservice**: `service-payment-api` (status: `active`, tier: Tier-1, language: TypeScript)
+- **Source Repository**: `repo-payment-api` (Git main branch)
+- **Pending Pull Request**: `pr-482` (title: "Update payments SDK", status: `awaiting_review`)
+- **Blocked Review Task**: `task-code-review-482` (status: `in_progress`, SLA breached: 18h)
+- **Assigned Reviewer on Leave**: `person-liam-patel` (status: `on_leave`, return: `2026-10-28`)
+- **Leave Calendar Event**: `event-liam-leave` ("Liam Patel scheduled annual leave")
+- **Active Eligible Peer Reviewer**: `person-ravi-kulkarni` (status: `active`, role: Staff Engineer, domain approved)
+- **Verified Dependency Path**: `release-payments-2026-10` -> `DEPLOYS` -> `service-payment-api` -> `IMPLEMENTED_IN` -> `repo-payment-api` -> `HAS_PULL_REQUEST` -> `pr-482` -> `BLOCKED_BY` -> `task-code-review-482` -> `ASSIGNED_TO` -> `person-liam-patel`.
 
-1. **Release Dependency Chain**:
-   - `release-payments-2026-10` (`delayed`) deploys `service-payment-api`.
-   - `service-payment-api` is implemented in repository `repo-payment-api`, which has pending pull request `pr-482`.
-2. **Review Task Blockage**:
-   - `pr-482` is blocked by review task `task-code-review-482` (status: `in_progress`).
-   - Assigned engineer `person-liam-patel` is currently `on_leave` with active leave event `event-liam-leave`.
-3. **Governance Unblocking**:
-   - Policy check against `policy-code-review-reassignment` verifies that reassigning to available Staff Engineer **Ravi Kulkarni** (`person-ravi-kulkarni`) unblocks the path without compliance violations.
+### 3. Reasoning / Investigation Steps
+1. Evaluated `release-payments-2026-10` dependencies, tracing through `service-payment-api` and repository `repo-payment-api`.
+2. Located unmerged pull request `pr-482` holding production deployment artifact verification.
+3. Inspected blocking task `task-code-review-482` and cross-referenced HR calendar graph finding assignee on leave.
+4. Queried `policy-code-review-reassignment` confirming that reassignment to peer Staff Engineer Ravi Kulkarni unblocks the release without governance violations.
 
-#### Verified Evidence:
-- Complete 5-hop path verified across Git and HR records with 1.0 confidence.
-- Recommended Action: Approve reassignment of `task-code-review-482` to Ravi Kulkarni.""",
+### 4. Risk Assessment
+- **Risk Level**: `HIGH` (Schedule Risk Score: 0.78 / 1.0)
+- **Contributing Factors**: Production release deadline in 24 hours; critical path blocked by personnel unavailability.
+- **Uncertainties**: Security review task `task-security-review-482` must also complete concurrently before final merge.
+
+### 5. Recommended Actions
+- Reassign `task-code-review-482` to Staff Engineer Ravi Kulkarni (`person-ravi-kulkarni`).
+- Notify release coordination channel upon reassignment confirmation.
+*(Action execution requires human supervisor approval in Workspace).*
+
+### 6. Sources & Execution Details
+- **Graphs Queried**: `graphos_dev`, `ALL_GRAPHS`
+- **Tools Invoked**: `traverse_relationships`, `get_entity_profile`, `check_policy`
+- **Provenance Verification Rate**: 100% verified across Git and HR records
+- **Status**: Completed successfully""",
         "evidence_summary": {
             "total_entities_verified": 6,
             "unique_entities_count": 6,

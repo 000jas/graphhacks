@@ -35,6 +35,7 @@ import {
   Trash2,
   Plus,
   Lock,
+  ExternalLink,
 } from "lucide-react";
 import {
   InvestigationResult,
@@ -65,6 +66,7 @@ import { GraphExplorer } from "./GraphExplorer";
 import { ImportDatasetModal } from "./ImportDatasetModal";
 import { FormattedMarkdown } from "./FormattedMarkdown";
 import { AuthModal } from "./AuthModal";
+import { parseInvestigationResponse } from "../lib/responseParser";
 
 const EMPTY_KEY_PATHS: any[] = [];
 const EMPTY_ENTITIES: Record<string, EntityFact> = {};
@@ -113,6 +115,8 @@ export function Workspace({
   const [isReasoningExpanded, setIsReasoningExpanded] = useState<boolean>(true);
   const [copiedAnswer, setCopiedAnswer] = useState<boolean>(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [isTechnicalSourcesExpanded, setIsTechnicalSourcesExpanded] = useState<boolean>(false);
+  const [isDetailedEvidenceExpanded, setIsDetailedEvidenceExpanded] = useState<boolean>(false);
 
   const refreshConversations = async () => {
     try {
@@ -974,7 +978,14 @@ export function Workspace({
                       </button>
                     </div>
                     <div className="prose prose-slate max-w-none text-[#102f58] leading-relaxed">
-                      <FormattedMarkdown content={msg.content} />
+                      <FormattedMarkdown
+                        content={msg.content}
+                        onEntityClick={(id) => {
+                          setSelectedEntityId(id);
+                          setActiveTab("graph");
+                        }}
+                        entityIds={msg.metadata?.evidence_summary?.entities ? Object.keys(msg.metadata.evidence_summary.entities) : undefined}
+                      />
                     </div>
                   </div>
                 );
@@ -1131,29 +1142,30 @@ export function Workspace({
                 </div>
               </div>
 
-              {/* Render Final Answer with Rich Markdown, Tables, and Typography */}
-              <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
-                <FormattedMarkdown content={currentResult.final_answer} />
-              </div>
-
-              {/* End-to-End AI Action System Card - Full 8-Stage Lifecycle */}
+              {/* Structured Investigation Response Sections */}
               {(() => {
                 const answer = currentResult.final_answer || "";
-                const lifecycle = (currentResult as any)?.action_lifecycle;
-                const match = answer.match(/(?:###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)[\s\S]*)/i);
+                const sections = parseInvestigationResponse(answer);
                 const entityKeys = Object.keys(currentResult.evidence_summary?.entities || {});
-                const hasEntities = entityKeys.length > 0;
+                const keyPaths = currentResult.evidence_summary?.key_paths || [];
+                const lifecycle = (currentResult as any)?.action_lifecycle;
+                const riskLevel = lifecycle?.risk_level || (
+                  sections.risk?.includes("CRITICAL") ? "CRITICAL" :
+                  sections.risk?.includes("HIGH") ? "HIGH" :
+                  sections.risk?.includes("MEDIUM") ? "MEDIUM" :
+                  sections.risk?.includes("LOW") ? "LOW" : null
+                );
 
-                // Render action card if lifecycle exists, recommendations exist, or actionable findings/entities exist
-                if (!lifecycle && !match && !hasEntities) return null;
+                const recommendationText = sections.recommendations || (
+                  answer.match(/(?:###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)[\s\S]*)/i)?.[0]?.replace(/###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)/i, "").trim()
+                ) || (
+                  lifecycle?.rationale
+                    ? `${lifecycle.rationale} Target entity: ${lifecycle.target_id || entityKeys[0] || "target-node"}. Action type: ${lifecycle.action_type || "MERGE_DUPLICATES"}.`
+                    : entityKeys.length > 0
+                    ? `Supervisor identified actionable findings on entity ${entityKeys[0]}. Consequential action requires human supervisor authorization.`
+                    : null
+                );
 
-                const recommendationSnippet = match
-                  ? match[0].replace(/###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)/i, "").trim()
-                  : lifecycle?.rationale
-                  ? `${lifecycle.rationale} Target entity: ${lifecycle.target_id || entityKeys[0] || "target-node"}. Action type: ${lifecycle.action_type || "MERGE_DUPLICATES"}.`
-                  : `Supervisor identified actionable findings on entity ${entityKeys[0] || "target-node"}. Consequential action requires human supervisor authorization.`;
-
-                // Focal target ID from lifecycle or grounded findings
                 const focalEntityId = lifecycle?.target_id || entityKeys[0] || "target-node";
                 const actionType = lifecycle?.action_type || (
                   focalEntityId.startsWith("P-") ? "MERGE_DUPLICATES" :
@@ -1161,7 +1173,6 @@ export function Workspace({
                   focalEntityId.startsWith("role-") ? "REVOKE_ACCESS" :
                   focalEntityId.startsWith("acc-") ? "FREEZE_ACCOUNT" : "UPDATE_STATUS"
                 );
-                const riskLevel = lifecycle?.risk_level || "HIGH";
                 const proposalId = lifecycle?.proposal_id;
                 const approvalToken = lifecycle?.approval_token;
 
@@ -1174,214 +1185,489 @@ export function Workspace({
                   : "status=updated, state=verified";
 
                 return (
-                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-[#0a192f] to-slate-900 text-white border border-blue-500/30 shadow-lg space-y-4 mt-5">
-                    {/* Header */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-1.5 rounded-lg bg-blue-500/20 border border-blue-400/40 text-blue-400">
-                          <ShieldCheck className="w-4 h-4" />
+                  <div className="space-y-4">
+                    {/* Clickable Grounded Entity Chips Bar */}
+                    {entityKeys.length > 0 && (
+                      <div className="p-3 rounded-2xl bg-[#eff7ff] border border-[#1678ef]/20 flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-[#102f58] mr-1">
+                          <Network className="w-3.5 h-3.5 text-[#1678ef]" />
+                          <span>Connected Graph Entities:</span>
                         </div>
-                        <div>
-                          <div className="text-xs font-bold tracking-tight text-white flex items-center gap-2">
-                            <span>GraphOS AI Action System</span>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                              Active Action Lifecycle
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            Schema-Aware &bull; Domain-Independent &bull; Ground-Truth Verified
-                          </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {entityKeys.slice(0, 16).map((entId) => {
+                            const entity = (currentResult.evidence_summary?.entities as any)?.[entId];
+                            const label = entity?.name || entity?.label || entId;
+                            const type = entity?.type;
+                            return (
+                              <button
+                                key={entId}
+                                onClick={() => {
+                                  setSelectedEntityId(entId);
+                                  setActiveTab("graph");
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-[#4370aa]/20 hover:border-[#1678ef] text-xs font-medium text-[#102f58] hover:text-[#1678ef] shadow-xs hover:shadow-sm transition cursor-pointer group"
+                                title={`Click to locate ${label} in Graph Explorer`}
+                              >
+                                <span className="text-[#1678ef] group-hover:scale-110 transition-transform">📍</span>
+                                <span className="font-semibold">{label}</span>
+                                {type && <span className="text-[10px] text-[#71849e]">({type})</span>}
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71849e] opacity-0 group-hover:opacity-100 transition-opacity ml-0.5" />
+                              </button>
+                            );
+                          })}
                         </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          Risk: HIGH (Consequential)
+                        <span className="text-[11px] text-[#71849e] ml-auto">
+                          Click any entity to inspect & highlight in Graph Explorer
                         </span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                          {selectedGraph}
-                        </span>
                       </div>
-                    </div>
+                    )}
 
-                    {/* 8-Stage Lifecycle Stepper */}
-                    <div className="space-y-1.5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-                        <span>Action Lifecycle Protocol</span>
-                        <span className="text-slate-500 font-mono">8 of 8 Stages Enforced</span>
-                      </div>
-
-                      <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-center">
-                        {/* 1. Detect */}
-                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
-                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" /> 1. Detect
+                    {/* Section 1: Investigation Summary (Rendered Prominently) */}
+                    {sections.summary ? (
+                      <div className="p-5 rounded-2xl bg-gradient-to-br from-[#eff7ff] via-white to-[#f4f9ff] border-2 border-[#1678ef]/30 shadow-xs">
+                        <div className="flex items-center gap-2 mb-2.5 text-xs font-bold uppercase tracking-wider text-[#1678ef]">
+                          <Sparkles className="w-4 h-4 text-[#1678ef]" />
+                          <span>1. Investigation Summary</span>
+                          <span className="ml-auto text-[10px] normal-case font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                            Primary Grounded Finding
                           </span>
-                          <span className="text-[8px] text-slate-400">Grounded</span>
                         </div>
-
-                        {/* 2. Investigate */}
-                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
-                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" /> 2. Investigate
-                          </span>
-                          <span className="text-[8px] text-slate-400">Multi-Hop</span>
-                        </div>
-
-                        {/* 3. Plan */}
-                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
-                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" /> 3. Plan
-                          </span>
-                          <span className="text-[8px] text-slate-400">Schema-Bound</span>
-                        </div>
-
-                        {/* 4. Verify */}
-                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
-                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" /> 4. Verify
-                          </span>
-                          <span className="text-[8px] text-slate-400">Policy Passed</span>
-                        </div>
-
-                        {/* 5. Request Approval */}
-                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
-                          actionApproved
-                            ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
-                            : "bg-amber-950/40 border-amber-500/60 text-amber-300 animate-pulse"
-                        }`}>
-                          <span className="text-[9px] font-bold flex items-center gap-1">
-                            {actionApproved ? <Check className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />} 5. Approval
-                          </span>
-                          <span className="text-[8px] text-slate-400">{actionApproved ? "Authorized" : "Awaiting Human"}</span>
-                        </div>
-
-                        {/* 6. Execute */}
-                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
-                          actionApproved
-                            ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
-                            : isApprovingAction
-                            ? "bg-blue-950/40 border-blue-500/60 text-blue-300"
-                            : "bg-slate-800/40 border-slate-700/50 text-slate-500"
-                        }`}>
-                          <span className="text-[9px] font-bold flex items-center gap-1">
-                            {actionApproved ? <Check className="w-2.5 h-2.5" /> : "6. Execute"}
-                          </span>
-                          <span className="text-[8px] text-slate-400">{actionApproved ? "Completed" : "Idempotent"}</span>
-                        </div>
-
-                        {/* 7. Validate */}
-                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
-                          isVerifiedSuccess
-                            ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
-                            : actionApproved && !isVerifiedSuccess
-                            ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-                            : "bg-slate-800/40 border-slate-700/50 text-slate-500"
-                        }`}>
-                          <span className="text-[9px] font-bold flex items-center gap-1">
-                            {isVerifiedSuccess ? <Check className="w-2.5 h-2.5" /> : "7. Validate"}
-                          </span>
-                          <span className="text-[8px] text-slate-400">{isVerifiedSuccess ? "Verified" : "Post-Read"}</span>
-                        </div>
-
-                        {/* 8. Audit */}
-                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
-                          actionApproved
-                            ? "bg-indigo-950/40 border-indigo-500/40 text-indigo-300"
-                            : "bg-slate-800/40 border-slate-700/50 text-slate-500"
-                        }`}>
-                          <span className="text-[9px] font-bold flex items-center gap-1">
-                            {actionApproved ? <Check className="w-2.5 h-2.5" /> : "8. Audit"}
-                          </span>
-                          <span className="text-[8px] text-slate-400">{actionApproved ? "Immutable" : "FalkorDB"}</span>
+                        <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
+                          <FormattedMarkdown
+                            content={sections.summary}
+                            onEntityClick={(entId) => {
+                              setSelectedEntityId(entId);
+                              setActiveTab("graph");
+                            }}
+                            entityIds={entityKeys}
+                          />
                         </div>
                       </div>
-                    </div>
-
-                    {/* Proposed Action Body */}
-                    <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-xs text-slate-300 leading-relaxed font-sans">
-                      <div className="font-semibold text-white mb-1 flex items-center gap-1.5">
-                        <Zap className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Proposed Corrective Action & Justification:</span>
+                    ) : !sections.isStructured ? (
+                      <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
+                        <FormattedMarkdown
+                          content={currentResult.final_answer}
+                          onEntityClick={(entId) => {
+                            setSelectedEntityId(entId);
+                            setActiveTab("graph");
+                          }}
+                          entityIds={entityKeys}
+                        />
                       </div>
-                      <FormattedMarkdown content={recommendationSnippet} />
-                    </div>
+                    ) : null}
 
-                    {/* Verification & Outcome Confirmation Banner */}
-                    {actionApproved && (
-                      <div className={`p-3 rounded-xl border space-y-1.5 text-xs transition ${
-                        isVerifiedSuccess
-                          ? "bg-emerald-950/50 border-emerald-500/60 text-emerald-200"
-                          : "bg-rose-950/50 border-rose-500/60 text-rose-200"
-                      }`}>
+                    {/* Section 2: Evidence & Connected Entities */}
+                    {sections.evidence && (
+                      <div className="p-4 sm:p-5 rounded-2xl bg-white border border-[#4370aa]/20 shadow-xs space-y-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 font-bold text-white">
-                            {isVerifiedSuccess ? (
-                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                            ) : (
-                              <AlertCircle className="w-4 h-4 text-rose-400" />
-                            )}
-                            <span>{isVerifiedSuccess ? "Post-State Ground-Truth Verified in FalkorDB" : "Post-State Verification Failed"}</span>
+                          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#102f58]">
+                            <Database className="w-4 h-4 text-[#1678ef]" />
+                            <span>2. Evidence & Connected Entities</span>
                           </div>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/40 border border-white/10">
-                            Audit Record ID: {auditId}
+                          <span className="text-[11px] font-mono text-[#71849e]">
+                            {entityKeys.length} nodes verified &bull; {keyPaths.length} traversal paths
                           </span>
                         </div>
-                        <div className="text-[11px] opacity-90">
-                          {isVerifiedSuccess ? (
-                            <span>
-                              Verified property mutations in graph: <strong className="font-mono text-emerald-300">{verifiedProps}</strong>. Outcome certified by read-verification queries.
-                            </span>
-                          ) : (
-                            <span>
-                              {actionResult?.message || "Execution outcome failed verification against post-state. Success cannot be claimed."}
-                            </span>
-                          )}
+
+                        <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
+                          <FormattedMarkdown
+                            content={sections.evidence}
+                            onEntityClick={(entId) => {
+                              setSelectedEntityId(entId);
+                              setActiveTab("graph");
+                            }}
+                            entityIds={entityKeys}
+                          />
+                        </div>
+
+                        {/* Expandable Traversal Paths & Deep Graph Evidence */}
+                        {keyPaths.length > 0 && (
+                          <div className="pt-2 border-t border-[#4370aa]/15">
+                            <button
+                              onClick={() => setIsDetailedEvidenceExpanded(!isDetailedEvidenceExpanded)}
+                              className="flex items-center justify-between w-full py-1.5 text-xs font-semibold text-[#1678ef] hover:text-[#102f58] transition cursor-pointer"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Network className="w-3.5 h-3.5" />
+                                <span>{isDetailedEvidenceExpanded ? "Hide" : "Show"} Verified Graph Traversal Paths ({keyPaths.length})</span>
+                              </span>
+                              {isDetailedEvidenceExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            </button>
+
+                            {isDetailedEvidenceExpanded && (
+                              <div className="mt-2 space-y-2 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                                {keyPaths.map((p, idx) => {
+                                  const pathLabel = p.description || (p.chain_names?.length ? p.chain_names.join(" → ") : `Path #${idx + 1}`);
+                                  const pathStr = p.path || (p.edges?.length ? p.edges.map(e => `${e.from_id} -[${e.relationship_type}]-> ${e.to_id}`).join(" | ") : `${p.source_id} → ${p.target_id}`);
+                                  return (
+                                    <div key={idx} className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs font-mono space-y-1">
+                                      <div className="text-[#1678ef] font-semibold">{pathLabel}</div>
+                                      <div className="text-slate-600 break-all">{pathStr}</div>
+                                      {p.significance && <div className="text-[11px] text-slate-500 font-sans italic">{p.significance}</div>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Section 3: Reasoning / Investigation Steps */}
+                    {sections.reasoning && (
+                      <div className="p-4 sm:p-5 rounded-2xl bg-white border border-[#4370aa]/20 shadow-xs space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#102f58]">
+                            <Activity className="w-4 h-4 text-[#1678ef]" />
+                            <span>3. Reasoning & Investigation Steps</span>
+                          </div>
+                          <button
+                            onClick={() => setActiveTab("activity")}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-[#1678ef] hover:underline cursor-pointer"
+                          >
+                            <span>View Full Agent Trace ({currentResult.steps?.length || events.length} Steps)</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
+                          <FormattedMarkdown
+                            content={sections.reasoning}
+                            onEntityClick={(entId) => {
+                              setSelectedEntityId(entId);
+                              setActiveTab("graph");
+                            }}
+                            entityIds={entityKeys}
+                          />
                         </div>
                       </div>
                     )}
 
-                    {/* Footer Actions */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-white/10">
-                      <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                        <Lock className="w-3 h-3 text-amber-400" />
-                        <span>Supervisor Permission Policy: Consequential actions require explicit human sign-off.</span>
-                      </div>
+                    {/* Section 4: Risk Assessment (Only displayed when risk data exists) */}
+                    {(sections.risk || riskLevel) && (
+                      <div className="p-4 sm:p-5 rounded-2xl bg-white border border-amber-500/30 shadow-xs space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-800">
+                            <Shield className="w-4 h-4 text-amber-600" />
+                            <span>4. Risk Assessment</span>
+                          </div>
+                          {riskLevel && (
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                              riskLevel === "CRITICAL" ? "bg-rose-100 text-rose-800 border-rose-300" :
+                              riskLevel === "HIGH" ? "bg-amber-100 text-amber-800 border-amber-300" :
+                              riskLevel === "MEDIUM" ? "bg-yellow-100 text-yellow-800 border-yellow-300" :
+                              "bg-slate-100 text-slate-800 border-slate-300"
+                            }`}>
+                              Risk Level: {riskLevel}
+                            </span>
+                          )}
+                        </div>
 
-                      <button
-                        onClick={() => {
-                          if (proposalId && approvalToken) {
-                            handleExecuteLifecycle(proposalId, approvalToken, actionType, focalEntityId);
-                          } else {
-                            handleApproveAction(actionType, focalEntityId);
-                          }
-                        }}
-                        disabled={isApprovingAction || actionApproved}
-                        className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer shadow-md ${
-                          actionApproved
-                            ? "bg-emerald-600/90 text-white cursor-default"
-                            : isApprovingAction
-                            ? "bg-blue-600/50 text-white cursor-wait"
-                            : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white hover:shadow-blue-500/25 transform hover:scale-[1.02] active:scale-[0.98]"
-                        }`}
-                      >
-                        {isApprovingAction ? (
-                          <>
-                            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            <span>Executing & Verifying Post-State...</span>
-                          </>
-                        ) : actionApproved ? (
-                          <>
-                            <CheckCircle2 className="w-4 h-4 text-white" />
-                            <span>Action Executed & Verified</span>
-                          </>
-                        ) : (
-                          <>
-                            <ShieldCheck className="w-4 h-4 text-white" />
-                            <span>Approve & Execute Action</span>
-                          </>
+                        {sections.risk && (
+                          <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
+                            <FormattedMarkdown
+                              content={sections.risk}
+                              onEntityClick={(entId) => {
+                                setSelectedEntityId(entId);
+                                setActiveTab("graph");
+                              }}
+                              entityIds={entityKeys}
+                            />
+                          </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* Section 5: Recommended Actions & AI Action Lifecycle System */}
+                    {(recommendationText || lifecycle) && (
+                      <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-[#0a192f] to-slate-900 text-white border border-blue-500/30 shadow-lg space-y-4">
+                        {/* Header */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="p-1.5 rounded-lg bg-blue-500/20 border border-blue-400/40 text-blue-400">
+                              <ShieldCheck className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold tracking-tight text-white flex items-center gap-2">
+                                <span>5. Recommended Actions & AI Action System</span>
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                  {actionApproved ? "Action Executed & Verified" : "Awaiting Human Sign-Off"}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                Explicit distinction: Recommendations vs. Executed actions &bull; Consequential changes require authorization
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {riskLevel && (
+                              <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                                riskLevel === "CRITICAL" ? "bg-rose-500/20 text-rose-300 border-rose-500/30" :
+                                riskLevel === "HIGH" ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
+                                "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                              }`}>
+                                Risk: {riskLevel}
+                              </span>
+                            )}
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                              {selectedGraph}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 8-Stage Lifecycle Stepper */}
+                        <div className="space-y-1.5">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                            <span>Action Lifecycle Protocol</span>
+                            <span className="text-slate-500 font-mono">8 of 8 Stages Enforced</span>
+                          </div>
+
+                          <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-center">
+                            {/* 1. Detect */}
+                            <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                              <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                                <Check className="w-2.5 h-2.5" /> 1. Detect
+                              </span>
+                              <span className="text-[8px] text-slate-400">Grounded</span>
+                            </div>
+
+                            {/* 2. Investigate */}
+                            <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                              <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                                <Check className="w-2.5 h-2.5" /> 2. Investigate
+                              </span>
+                              <span className="text-[8px] text-slate-400">Multi-Hop</span>
+                            </div>
+
+                            {/* 3. Plan */}
+                            <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                              <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                                <Check className="w-2.5 h-2.5" /> 3. Plan
+                              </span>
+                              <span className="text-[8px] text-slate-400">Schema-Bound</span>
+                            </div>
+
+                            {/* 4. Verify */}
+                            <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                              <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                                <Check className="w-2.5 h-2.5" /> 4. Verify
+                              </span>
+                              <span className="text-[8px] text-slate-400">Policy Passed</span>
+                            </div>
+
+                            {/* 5. Request Approval */}
+                            <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                              actionApproved
+                                ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                                : "bg-amber-950/40 border-amber-500/60 text-amber-300 animate-pulse"
+                            }`}>
+                              <span className="text-[9px] font-bold flex items-center gap-1">
+                                {actionApproved ? <Check className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />} 5. Approval
+                              </span>
+                              <span className="text-[8px] text-slate-400">{actionApproved ? "Authorized" : "Awaiting Human"}</span>
+                            </div>
+
+                            {/* 6. Execute */}
+                            <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                              actionApproved
+                                ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                                : isApprovingAction
+                                ? "bg-blue-950/40 border-blue-500/60 text-blue-300"
+                                : "bg-slate-800/40 border-slate-700/50 text-slate-500"
+                            }`}>
+                              <span className="text-[9px] font-bold flex items-center gap-1">
+                                {actionApproved ? <Check className="w-2.5 h-2.5" /> : "6. Execute"}
+                              </span>
+                              <span className="text-[8px] text-slate-400">{actionApproved ? "Completed" : "Idempotent"}</span>
+                            </div>
+
+                            {/* 7. Validate */}
+                            <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                              isVerifiedSuccess
+                                ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                                : actionApproved && !isVerifiedSuccess
+                                ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
+                                : "bg-slate-800/40 border-slate-700/50 text-slate-500"
+                            }`}>
+                              <span className="text-[9px] font-bold flex items-center gap-1">
+                                {isVerifiedSuccess ? <Check className="w-2.5 h-2.5" /> : "7. Validate"}
+                              </span>
+                              <span className="text-[8px] text-slate-400">{isVerifiedSuccess ? "Verified" : "Post-Read"}</span>
+                            </div>
+
+                            {/* 8. Audit */}
+                            <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                              actionApproved
+                                ? "bg-indigo-950/40 border-indigo-500/40 text-indigo-300"
+                                : "bg-slate-800/40 border-slate-700/50 text-slate-500"
+                            }`}>
+                              <span className="text-[9px] font-bold flex items-center gap-1">
+                                {actionApproved ? <Check className="w-2.5 h-2.5" /> : "8. Audit"}
+                              </span>
+                              <span className="text-[8px] text-slate-400">{actionApproved ? "Immutable" : "FalkorDB"}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Proposed Action Body */}
+                        {recommendationText && (
+                          <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 text-xs text-slate-300 leading-relaxed font-sans">
+                            <div className="font-semibold text-white mb-1.5 flex items-center gap-1.5">
+                              <Zap className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Recommended Remediation & Proposed Plan:</span>
+                            </div>
+                            <FormattedMarkdown
+                              content={recommendationText}
+                              onEntityClick={(entId) => {
+                                setSelectedEntityId(entId);
+                                setActiveTab("graph");
+                              }}
+                              entityIds={entityKeys}
+                            />
+                          </div>
+                        )}
+
+                        {/* Verification & Outcome Confirmation Banner */}
+                        {actionApproved && (
+                          <div className={`p-3 rounded-xl border space-y-1.5 text-xs transition ${
+                            isVerifiedSuccess
+                              ? "bg-emerald-950/50 border-emerald-500/60 text-emerald-200"
+                              : "bg-rose-950/50 border-rose-500/60 text-rose-200"
+                          }`}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 font-bold text-white">
+                                {isVerifiedSuccess ? (
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                                ) : (
+                                  <AlertCircle className="w-4 h-4 text-rose-400" />
+                                )}
+                                <span>{isVerifiedSuccess ? "Post-State Ground-Truth Verified in FalkorDB" : "Post-State Verification Failed"}</span>
+                              </div>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/40 border border-white/10">
+                                Audit Record ID: {auditId}
+                              </span>
+                            </div>
+                            <div className="text-[11px] opacity-90">
+                              {isVerifiedSuccess ? (
+                                <span>
+                                  Verified property mutations in graph: <strong className="font-mono text-emerald-300">{verifiedProps}</strong>. Outcome certified by read-verification queries.
+                                </span>
+                              ) : (
+                                <span>
+                                  {actionResult?.message || "Execution outcome failed verification against post-state. Success cannot be claimed."}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Footer Actions & Authorization Control */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-white/10">
+                          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                            <Lock className="w-3 h-3 text-amber-400" />
+                            <span>Supervisor Permission Policy: Consequential actions require explicit human sign-off.</span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              if (proposalId && approvalToken) {
+                                handleExecuteLifecycle(proposalId, approvalToken, actionType, focalEntityId);
+                              } else {
+                                handleApproveAction(actionType, focalEntityId);
+                              }
+                            }}
+                            disabled={isApprovingAction || actionApproved}
+                            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer shadow-md ${
+                              actionApproved
+                                ? "bg-emerald-600/90 text-white cursor-default"
+                                : isApprovingAction
+                                ? "bg-blue-600/50 text-white cursor-wait"
+                                : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white hover:shadow-blue-500/25 transform hover:scale-[1.02] active:scale-[0.98]"
+                            }`}
+                          >
+                            {isApprovingAction ? (
+                              <>
+                                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                <span>Executing & Verifying Post-State...</span>
+                              </>
+                            ) : actionApproved ? (
+                              <>
+                                <CheckCircle2 className="w-4 h-4 text-white" />
+                                <span>Action Executed & Verified</span>
+                              </>
+                            ) : (
+                              <>
+                                <ShieldCheck className="w-4 h-4 text-white" />
+                                <span>Authorize & Execute Action</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Section 6: Sources & Execution Details (Expandable) */}
+                    <div className="rounded-2xl border border-[#4370aa]/20 bg-[#f8fafc] overflow-hidden">
+                      <button
+                        onClick={() => setIsTechnicalSourcesExpanded(!isTechnicalSourcesExpanded)}
+                        className="w-full px-4 py-3 flex items-center justify-between text-xs font-semibold text-[#102f58] hover:bg-slate-100/80 transition cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Sliders className="w-3.5 h-3.5 text-[#1678ef]" />
+                          <span>6. Sources & Technical Execution Details</span>
+                          <span className="text-[10px] text-[#71849e] font-normal">
+                            ({currentResult.graphs_queried?.length || 1} graphs &bull; {currentResult.total_tool_calls} tool executions &bull; {currentResult.duration_seconds}s)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-[#1678ef]">
+                          <span>{isTechnicalSourcesExpanded ? "Collapse" : "Expand"}</span>
+                          {isTechnicalSourcesExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </div>
                       </button>
+
+                      {isTechnicalSourcesExpanded && (
+                        <div className="p-4 border-t border-[#4370aa]/15 bg-white space-y-3 text-xs">
+                          {sections.sources && (
+                            <div className="pb-3 border-b border-slate-100">
+                              <FormattedMarkdown content={sections.sources} />
+                            </div>
+                          )}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                              <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">Queried Graphs</div>
+                              <div className="font-mono font-medium text-[#102f58] truncate">
+                                {currentResult.graphs_queried?.join(", ") || selectedGraph}
+                              </div>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                              <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">Execution Metrics</div>
+                              <div className="text-[#102f58]">
+                                <span className="font-semibold">{currentResult.duration_seconds}s</span> runtime &bull;{" "}
+                                <span className="font-semibold">{currentResult.total_tool_calls}</span> tool calls
+                              </div>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                              <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">Grounding & Provenance</div>
+                              <div className="text-emerald-700 font-semibold flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>100% Grounded in FalkorDB</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="pt-2 flex items-center justify-between text-[11px] text-slate-500">
+                            <span>Timestamp: {new Date().toLocaleTimeString()}</span>
+                            <button
+                              onClick={() => setActiveTab("activity")}
+                              className="text-[#1678ef] hover:underline cursor-pointer flex items-center gap-1 font-medium"
+                            >
+                              <span>Inspect Cypher queries & MCP parameters in Agent Trace</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -1503,7 +1789,7 @@ export function Workspace({
             { id: "graph", label: "Graph Explorer", icon: Network },
             { id: "paths", label: "Evidence Paths", icon: Layers },
             { id: "entities", label: "Entities", icon: Database },
-            { id: "activity", label: "Activity", icon: Clock },
+            { id: "activity", label: "Agent Trace", icon: Clock },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;

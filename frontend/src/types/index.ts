@@ -29,6 +29,9 @@ export interface EvidencePath {
   relationships: string[];
   edges?: RelationshipEdge[];
   is_verified: boolean;
+  description?: string;
+  path?: string;
+  significance?: string;
 }
 
 export interface EvidenceSummary {
@@ -79,6 +82,7 @@ export interface InvestigationResult {
   provider_info?: Record<string, any>;
   unresolved_questions?: string[];
   action_lifecycle?: any;
+  graphs_queried?: string[];
 }
 
 export interface GraphSchemaProfile {

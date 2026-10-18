@@ -6,9 +6,11 @@ import remarkGfm from "remark-gfm";
 
 interface FormattedMarkdownProps {
   content: string;
+  onEntityClick?: (entityId: string) => void;
+  entityIds?: string[];
 }
 
-export function FormattedMarkdown({ content }: FormattedMarkdownProps) {
+export function FormattedMarkdown({ content, onEntityClick, entityIds }: FormattedMarkdownProps) {
   return (
     <div className="formatted-markdown space-y-3 text-xs sm:text-sm text-slate-800 leading-relaxed">
       <ReactMarkdown
@@ -97,6 +99,29 @@ export function FormattedMarkdown({ content }: FormattedMarkdownProps) {
                 </div>
               );
             }
+            const text = String(children || "").trim();
+            const isEntity = onEntityClick && (
+              (entityIds && entityIds.includes(text)) ||
+              /^(?:P-\d+|ADDR-\d+|A-\d+|ALERT-\d+|CVE-[\w-]+|svc-[\w-]+|role-[\w-]+|repo-[\w-]+|pr-[\w-]+|task-[\w-]+|acc-[\w-]+|device-[\w-]+|network-[\w-]+|release-[\w-]+|person-[\w-]+|db-[\w-]+|region-[\w-]+)$/i.test(text)
+            );
+
+            if (isEntity && onEntityClick) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEntityClick(text);
+                  }}
+                  title={`Click to focus and highlight ${text} in Graph Explorer`}
+                  className="inline-flex items-center gap-1 font-mono text-[11px] px-1.5 py-0.5 rounded-md bg-[#eff7ff] hover:bg-[#dbeafe] text-[#1678ef] hover:text-[#0b5ac2] border border-[#1678ef]/30 hover:border-[#1678ef]/60 font-semibold cursor-pointer transition shadow-2xs hover:scale-105 active:scale-95"
+                >
+                  <span>{children}</span>
+                  <span className="text-[9px] opacity-75">📍</span>
+                </button>
+              );
+            }
+
             return (
               <code className="font-mono text-[11.5px] px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200/70 font-semibold break-all">
                 {children}
