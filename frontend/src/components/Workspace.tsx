@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Database,
   Search,
@@ -25,6 +25,13 @@ import {
   Activity,
   Upload,
   ShieldCheck,
+  Menu,
+  X,
+  Square,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import {
   InvestigationResult,
@@ -45,6 +52,9 @@ import { GraphExplorer } from "./GraphExplorer";
 import { ImportDatasetModal } from "./ImportDatasetModal";
 import { FormattedMarkdown } from "./FormattedMarkdown";
 
+const EMPTY_KEY_PATHS: any[] = [];
+const EMPTY_ENTITIES: Record<string, EntityFact> = {};
+const EMPTY_EDGES: any[] = [];
 
 interface WorkspaceProps {
   initialQuery?: string;
@@ -59,7 +69,7 @@ export function Workspace({
   initialGraph = "ALL_GRAPHS",
   onBackToLanding,
 }: WorkspaceProps) {
-  const [mode, setMode] = useState<"live" | "demo">(initialMode);
+  const [mode, setMode] = useState<"live" | "demo">("live");
   const [queryInput, setQueryInput] = useState(initialQuery);
   const [currentObjective, setCurrentObjective] = useState(initialQuery);
   const [isInvestigating, setIsInvestigating] = useState(false);
@@ -67,27 +77,35 @@ export function Workspace({
   const [events, setEvents] = useState<InvestigationEvent[]>([]);
   const [currentResult, setCurrentResult] = useState<InvestigationResult | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-  const [availableGraphs, setAvailableGraphs] = useState<string[]>([
-    "ALL_GRAPHS",
-    "fraud_swiftpay",
-    "graphos_dev",
-    "security_swiftpay",
-    "fraud_Front",
-    "swiftpay_unified",
-  ]);
+  const [availableGraphs, setAvailableGraphs] = useState<string[]>(["ALL_GRAPHS"]);
   const [selectedGraph, setSelectedGraph] = useState<string>(initialGraph || "ALL_GRAPHS");
   const [recentSessions, setRecentSessions] = useState<
     Array<{ id: string; query: string; timestamp: string }>
-  >([
-    { id: "s-fraud", query: "Investigate suspicious transactions and find connected entities", timestamp: "Just now" },
-    { id: "s-sec", query: "Triage security finding CVE-2026-4412 blast radius", timestamp: "10m ago" },
-    { id: "s-code", query: "Find blockers for Payments Release October 2026", timestamp: "1h ago" },
-  ]);
+  >([]);
   const [schemaProfile, setSchemaProfile] = useState<GraphSchemaProfile | null>(null);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [actionApproved, setActionApproved] = useState(false);
   const [isApprovingAction, setIsApprovingAction] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [isReasoningExpanded, setIsReasoningExpanded] = useState<boolean>(true);
+  const [copiedAnswer, setCopiedAnswer] = useState<boolean>(false);
+
+  // Load real user sessions from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("graphos_recent_sessions");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setRecentSessions(parsed);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const handleApproveAction = async (actionType: string, targetId: string) => {
     setIsApprovingAction(true);
@@ -161,13 +179,10 @@ export function Workspace({
     });
   };
 
-  // Load health, graphs & schema on mount
+  // Load health, real graphs & schema on mount
   useEffect(() => {
     getHealth().then((h) => {
       setHealthStatus(h);
-      if (!h) {
-        setMode("demo");
-      }
     });
     getAvailableGraphs().then((res) => {
       if (res && res.graphs && res.graphs.length > 0) {
@@ -187,39 +202,83 @@ export function Workspace({
     loadGraphPreviewData(newGraph);
   };
 
-  // Run initial query if provided
+  // Populate input if an initial query was passed, without auto-executing
   useEffect(() => {
     if (initialQuery) {
-      handleRunInvestigation(initialQuery);
+      setQueryInput(initialQuery);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialQuery]);
+
+  const handleStopInvestigation = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsInvestigating(false);
+  };
 
   const handleRunInvestigation = async (queryToRun: string) => {
-    if (!queryToRun.trim() || isInvestigating) return;
+    if (!queryToRun.trim()) return;
+
+    // Abort any ongoing investigation
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setCurrentObjective(queryToRun);
     setIsInvestigating(true);
+    setIsReasoningExpanded(true);
     setEvents([]);
     setCurrentResult(null);
     setSelectedEntityId(null);
 
-    // Add to recent sessions
-    setRecentSessions((prev) => [
-      { id: `s-${Date.now()}`, query: queryToRun, timestamp: "Just now" },
-      ...prev.slice(0, 9),
-    ]);
+    // Add real query to recent sessions and persist in localStorage
+    setRecentSessions((prev) => {
+      const updated = [
+        {
+          id: `s-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          query: queryToRun,
+          timestamp: "Just now",
+        },
+        ...prev.filter((p) => p.query !== queryToRun).slice(0, 8),
+      ];
+      try {
+        localStorage.setItem("graphos_recent_sessions", JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
 
     try {
       const result = await executeInvestigationStream(
         queryToRun,
-        mode,
+        "live",
         (ev) => {
-          setEvents((prev) => [...prev, ev]);
+          setEvents((prev) => {
+            // Deduplicate exact consecutive duplicates
+            if (prev.length > 0) {
+              const last = prev[prev.length - 1];
+              if (last.type === ev.type && last.message === ev.message) {
+                return prev;
+              }
+            }
+            return [...prev, ev];
+          });
         },
-        selectedGraph
+        selectedGraph,
+        controller.signal
       );
-      setCurrentResult(result);
+      if (!controller.signal.aborted) {
+        setCurrentResult(result);
+        setIsReasoningExpanded(false);
+      }
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === "AbortError") {
+        return;
+      }
       setEvents((prev) => [
         ...prev,
         {
@@ -231,6 +290,7 @@ export function Workspace({
       ]);
     } finally {
       setIsInvestigating(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -242,22 +302,48 @@ export function Workspace({
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#f6faff] text-[#102f58]">
-      {/* LEFT SIDEBAR: Sessions, Connections & Schema */}
-      <aside className="w-64 lg:w-72 border-r border-[#4370aa]/15 bg-white/80 backdrop-blur-md flex flex-col shrink-0">
-        {/* Brand header */}
-        <div className="p-4 border-b border-[#4370aa]/15 flex items-center justify-between">
-          <button
-            onClick={onBackToLanding}
-            className="flex items-center gap-2 text-xs font-semibold text-[#71849e] hover:text-[#102f58] transition"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Home</span>
-          </button>
+    <div className="flex h-screen w-screen overflow-hidden bg-[#f6faff] text-[#102f58] relative">
+      {/* SIDEBAR BACKDROP OVERLAY */}
+      {isSidebarOpen && (
+        <div
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-40 transition-opacity animate-in fade-in"
+        />
+      )}
 
-          <span className="text-xs font-bold font-mono tracking-tight text-[#1678ef] bg-[#eff7ff] px-2.5 py-0.5 rounded-full border border-[#1678ef]/20">
-            GraphOS v1.0
-          </span>
+      {/* SLIDE-OVER HAMBURGER SIDEBAR: Sessions, Connections & Schema */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-72 sm:w-80 bg-white border-r border-[#4370aa]/15 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        {/* Brand & Close Header */}
+        <div className="p-4 border-b border-[#4370aa]/15 flex items-center justify-between bg-white">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setIsSidebarOpen(false);
+                onBackToLanding();
+              }}
+              className="flex items-center gap-1.5 text-xs font-semibold text-[#71849e] hover:text-[#102f58] transition"
+              title="Return to Landing Page"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Home</span>
+            </button>
+            <span className="text-xs font-bold font-mono tracking-tight text-[#1678ef] bg-[#eff7ff] px-2.5 py-0.5 rounded-full border border-[#1678ef]/20">
+              GraphOS v1.0
+            </span>
+          </div>
+
+          <button
+            onClick={() => setIsSidebarOpen(false)}
+            className="p-1.5 rounded-lg text-[#71849e] hover:text-[#102f58] hover:bg-slate-100 transition cursor-pointer"
+            title="Close sidebar"
+            aria-label="Close sidebar"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
         {/* New Investigation Button */}
@@ -268,41 +354,24 @@ export function Workspace({
               setEvents([]);
               setCurrentObjective("");
               setQueryInput("");
+              setIsSidebarOpen(false);
             }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-[#1678ef] to-[#268cf5] hover:from-[#1b80ff] hover:to-[#389aff] shadow-md shadow-[#1678ef]/20 transition"
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-[#1678ef] to-[#268cf5] hover:from-[#1b80ff] hover:to-[#389aff] shadow-md shadow-[#1678ef]/20 transition cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>New Investigation</span>
           </button>
         </div>
 
-        {/* Mode Selector */}
+        {/* Engine Status */}
         <div className="px-4 pb-3">
-          <div className="p-2.5 rounded-xl bg-[#f6faff] border border-[#4370aa]/15 flex flex-col gap-1.5">
+          <div className="p-2.5 rounded-xl bg-[#f6faff] border border-[#4370aa]/15 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-[#71849e]">
               Engine Mode
             </span>
-            <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-[#4370aa]/10">
-              <button
-                onClick={() => setMode("live")}
-                className={`flex-1 py-1 px-2 rounded-md text-[11px] font-semibold transition ${
-                  mode === "live"
-                    ? "bg-[#1678ef] text-white shadow-sm"
-                    : "text-[#71849e] hover:text-[#102f58]"
-                }`}
-              >
-                Live MCP
-              </button>
-              <button
-                onClick={() => setMode("demo")}
-                className={`flex-1 py-1 px-2 rounded-md text-[11px] font-semibold transition ${
-                  mode === "demo"
-                    ? "bg-amber-500 text-white shadow-sm"
-                    : "text-[#71849e] hover:text-[#102f58]"
-                }`}
-              >
-                Demo Scenarios
-              </button>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#eff7ff] border border-[#1678ef]/20">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[11px] font-semibold text-[#1678ef]">Live MCP Active</span>
             </div>
           </div>
         </div>
@@ -315,33 +384,28 @@ export function Workspace({
               <span>{selectedGraph === "ALL_GRAPHS" ? "Federated Graphs" : "Active Graph"}</span>
             </span>
             <span className="text-[10px] text-[#71849e]">
-              {selectedGraph === "ALL_GRAPHS" ? "All 5 Datasets" : "FalkorDB"}
+              {selectedGraph === "ALL_GRAPHS" ? "All Datasets" : "FalkorDB"}
             </span>
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            {(schemaProfile?.node_kinds || [
-              "Account",
-              "Service",
-              "Host",
-              "Vulnerability",
-              "Repository",
-              "Project",
-              "Person",
-              "Device",
-              "IP",
-              "Release",
-            ]).slice(0, 10).map((k: any, idx: number) => {
-              const kindName = typeof k === "string" ? k : k.kind;
-              return (
-                <span
-                  key={idx}
-                  className="px-2 py-0.5 rounded-md bg-[#eff7ff] text-[#1678ef] text-[10px] font-semibold border border-[#1678ef]/15"
-                >
-                  :{kindName}
-                </span>
-              );
-            })}
+          <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto pr-1">
+            {schemaProfile && schemaProfile.node_kinds && schemaProfile.node_kinds.length > 0 ? (
+              schemaProfile.node_kinds.map((k: any, idx: number) => {
+                const kindName = typeof k === "string" ? k : k.kind;
+                return (
+                  <span
+                    key={idx}
+                    className="px-2 py-0.5 rounded-md bg-[#eff7ff] text-[#1678ef] text-[10px] font-semibold border border-[#1678ef]/15"
+                  >
+                    :{kindName}
+                  </span>
+                );
+              })
+            ) : (
+              <span className="text-[11px] text-[#71849e] italic">
+                Discovering graph schema...
+              </span>
+            )}
           </div>
         </div>
 
@@ -351,83 +415,110 @@ export function Workspace({
             Recent Investigations
           </span>
           <div className="space-y-1.5">
-            {recentSessions.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => handleRunInvestigation(s.query)}
-                className="w-full text-left p-2 rounded-xl text-xs hover:bg-[#eff7ff] border border-transparent hover:border-[#1678ef]/20 transition flex flex-col gap-0.5 group"
-              >
-                <span className="font-medium text-[#102f58] line-clamp-2 group-hover:text-[#1678ef]">
-                  {s.query}
-                </span>
-                <span className="text-[10px] text-[#71849e]">{s.timestamp}</span>
-              </button>
-            ))}
+            {recentSessions.length > 0 ? (
+              recentSessions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => {
+                    handleRunInvestigation(s.query);
+                    setIsSidebarOpen(false);
+                  }}
+                  className="w-full text-left p-2.5 rounded-xl text-xs hover:bg-[#eff7ff] border border-transparent hover:border-[#1678ef]/20 transition flex flex-col gap-0.5 group cursor-pointer"
+                >
+                  <span className="font-medium text-[#102f58] line-clamp-2 group-hover:text-[#1678ef]">
+                    {s.query}
+                  </span>
+                  <span className="text-[10px] text-[#71849e]">{s.timestamp}</span>
+                </button>
+              ))
+            ) : (
+              <p className="text-[11px] text-[#71849e] italic py-2">
+                No recent investigations. Enter an objective to begin.
+              </p>
+            )}
           </div>
         </div>
       </aside>
 
       {/* CENTER PANEL: Investigation Conversation & Agent Stream */}
       <main className="flex-1 flex flex-col min-w-0 border-r border-[#4370aa]/15 bg-white">
-        {/* Top Header */}
-        <div className="px-6 py-4 border-b border-[#4370aa]/15 flex items-center justify-between bg-white shrink-0">
-          <div>
-            <h2 className="text-base font-bold text-[#102f58] truncate max-w-xl">
-              {currentObjective || "GraphOS Investigation Workspace"}
-            </h2>
-            <div className="flex items-center gap-2 text-xs text-[#71849e] mt-0.5">
-              <span className="font-semibold text-[#1678ef]">
-                {selectedGraph === "ALL_GRAPHS"
-                  ? "🌐 Federated Multi-Graph Engine (All 5 Datasets Active)"
-                  : `Active Graph: ${selectedGraph}`}
+        {/* Top Header with Hamburger & Clean Layout */}
+        <div className="px-5 py-3.5 border-b border-[#4370aa]/15 flex items-center justify-between bg-white shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Hamburger Button */}
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 -ml-1.5 rounded-xl text-[#71849e] hover:text-[#102f58] hover:bg-[#eff7ff] transition cursor-pointer"
+              title="Open Navigation & History"
+              aria-label="Open sidebar menu"
+            >
+              <Menu className="w-5 h-5 text-[#102f58]" />
+            </button>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={onBackToLanding}
+                className="flex items-center gap-1 text-xs font-semibold text-[#71849e] hover:text-[#102f58] transition"
+                title="Back to Home"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Home</span>
+              </button>
+              <span className="text-xs font-bold font-mono tracking-tight text-[#1678ef] bg-[#eff7ff] px-2 py-0.5 rounded-full border border-[#1678ef]/20">
+                GraphOS
               </span>
-              <span>•</span>
-              <span className="text-[#059669] font-medium">Read-Only Guardrails Enforced</span>
             </div>
+
+            <div className="h-4 w-px bg-slate-200 hidden sm:block" />
+
+            <h2 className="text-sm font-semibold text-[#102f58] truncate">
+              {currentObjective || "Investigation Workspace"}
+            </h2>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 shrink-0">
+            {/* Active Graph Dropdown Selector */}
             <div className="flex items-center gap-1.5 bg-[#f0f7ff] px-2.5 py-1.5 rounded-lg border border-[#1678ef]/20">
               <Database className="w-3.5 h-3.5 text-[#1678ef]" />
               <select
                 value={selectedGraph}
                 onChange={(e) => handleGraphChange(e.target.value)}
                 title="Select active graph database"
-                className="bg-transparent text-xs font-semibold text-[#102f58] focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs font-semibold text-[#102f58] focus:outline-none cursor-pointer max-w-[140px] sm:max-w-none truncate"
               >
-                <option value="ALL_GRAPHS">🌐 All Graphs (Federated Across All 5 Datasets)</option>
+                <option value="ALL_GRAPHS">All Graphs (Federated)</option>
                 {availableGraphs
                   .filter((g) => g !== "ALL_GRAPHS" && g !== "fraud_demo")
                   .map((g) => (
                     <option key={g} value={g}>
                       {g === "fraud_swiftpay"
-                        ? "💳 fraud_swiftpay (Financial Accounts & Fraud)"
+                        ? "fraud_swiftpay (Financial)"
                         : g === "graphos_dev"
-                        ? "💻 graphos_dev (Codebase AST & Git)"
+                        ? "graphos_dev (Codebase AST)"
                         : g === "security_swiftpay"
-                        ? "🛡️ security_swiftpay (Cloud Security & CVEs)"
+                        ? "security_swiftpay (Cloud Security)"
                         : g === "fraud_Front"
-                        ? "🛒 fraud_Front (Frontend & Web Activity)"
+                        ? "fraud_Front (Frontend Activity)"
                         : g === "swiftpay_unified"
-                        ? "🔗 swiftpay_unified (Unified Benchmark Dataset)"
-                        : `📊 ${g}`}
+                        ? "swiftpay_unified (Cross-Domain)"
+                        : g}
                     </option>
                   ))}
               </select>
             </div>
 
+            {/* Import Data Modal Trigger */}
             <button
               onClick={() => setIsImportModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition cursor-pointer"
-              title="Import CLI Code Parser JSON, Live CSV, or External Database"
+              title="Import Code AST JSON, Live CSV, or Dataset"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Import Data</span>
+              <span className="hidden sm:inline">Import</span>
             </button>
 
-
             {isInvestigating && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1678ef]/10 text-[#1678ef] text-xs font-semibold border border-[#1678ef]/20">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1678ef]/10 text-[#1678ef] text-xs font-semibold border border-[#1678ef]/20">
                 <span className="w-2 h-2 rounded-full bg-[#1678ef] animate-ping" />
                 <span>Investigating...</span>
               </div>
@@ -438,87 +529,173 @@ export function Workspace({
         {/* Scrollable Conversation / Stream Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {!currentObjective && !currentResult && (
-            <div className="flex flex-col items-center justify-center h-full text-center py-12">
-              <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-[#1678ef]/20 to-[#82c4ff]/20 flex items-center justify-center text-[#1678ef] mb-4">
-                <Search className="w-8 h-8" />
+            <div className="flex flex-col items-center justify-center h-full text-center py-12 px-4">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#1678ef]/15 to-[#38bdf8]/15 border border-[#1678ef]/25 flex items-center justify-center text-[#1678ef] mb-4 shadow-sm shadow-[#1678ef]/10">
+                <Sparkles className="w-7 h-7 text-[#1678ef]" />
               </div>
-              <h3 className="text-lg font-bold text-[#102f58]">Begin a Graph Investigation</h3>
-              <p className="text-sm text-[#71849e] max-w-md mt-1 mb-6">
-                Type an objective below or choose a starter scenario to discover connected entities, trace multi-hop relationship paths, and inspect grounded findings.
+
+              <h3 className="text-xl font-bold text-[#102f58] tracking-tight">
+                Autonomous Graph Intelligence
+              </h3>
+              <p className="text-xs sm:text-sm text-[#71849e] max-w-md mt-1.5 mb-8 leading-relaxed">
+                Investigate connected entities, trace multi-hop relationship paths, and uncover grounded findings across your knowledge graph.
               </p>
-              <div className="flex flex-wrap gap-2 justify-center max-w-lg">
+
+              {/* 3 Modern Prompt Starter Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-2xl">
                 {[
-                  "Investigate suspicious transactions and find connected entities",
-                  "Triage security findings and identify affected databases",
-                  "Trace dependencies for Payments Release October 2026",
-                ].map((prompt, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleRunInvestigation(prompt)}
-                    className="p-2.5 rounded-xl bg-[#f6faff] hover:bg-[#eff7ff] text-xs font-medium text-[#1678ef] border border-[#1678ef]/20 transition text-left"
-                  >
-                    "{prompt}"
-                  </button>
-                ))}
+                  {
+                    icon: CreditCard,
+                    title: "Financial Forensics",
+                    query: "Investigate suspicious transactions and find connected entities",
+                    badge: "Fraud",
+                  },
+                  {
+                    icon: Shield,
+                    title: "Security Blast Radius",
+                    query: "Triage security findings and identify affected databases",
+                    badge: "Vulnerability",
+                  },
+                  {
+                    icon: Code,
+                    title: "Code Dependencies",
+                    query: "Trace dependencies for Payments Release October 2026",
+                    badge: "Architecture",
+                  },
+                ].map((item, i) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => handleRunInvestigation(item.query)}
+                      className="p-4 rounded-2xl bg-[#fafcff] hover:bg-white border border-[#4370aa]/15 hover:border-[#1678ef]/40 shadow-xs hover:shadow-md transition text-left flex flex-col justify-between gap-3 group cursor-pointer transform hover:-translate-y-0.5 duration-150"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="w-8 h-8 rounded-xl bg-[#eff7ff] text-[#1678ef] flex items-center justify-center group-hover:scale-105 transition">
+                          <Icon className="w-4 h-4" />
+                        </div>
+                        <span className="text-[10px] font-semibold text-[#1678ef] bg-[#eff7ff] px-2 py-0.5 rounded-full border border-[#1678ef]/15">
+                          {item.badge}
+                        </span>
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-[#102f58] group-hover:text-[#1678ef] transition">
+                          {item.title}
+                        </h4>
+                        <p className="text-[11px] text-[#71849e] mt-1 line-clamp-2 leading-relaxed">
+                          {item.query}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
 
           {/* User question bubble */}
           {currentObjective && (
-            <div className="flex items-start gap-3 p-4 rounded-2xl bg-[#f6faff] border border-[#4370aa]/15">
-              <div className="w-8 h-8 rounded-full bg-[#1678ef] text-white flex items-center justify-center text-xs font-bold shrink-0">
+            <div className="flex items-start gap-3.5 p-4 sm:p-5 rounded-2xl bg-white border border-[#4370aa]/15 shadow-xs">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#1678ef] to-[#38bdf8] text-white flex items-center justify-center text-xs font-bold shadow-xs shrink-0">
                 You
               </div>
-              <div className="flex-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-[#71849e]">
-                  Investigation Objective
-                </span>
-                <p className="text-sm font-semibold text-[#102f58] mt-0.5">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#1678ef] bg-[#eff7ff] px-2 py-0.5 rounded-full border border-[#1678ef]/15">
+                    Investigation Objective
+                  </span>
+                  <span className="text-[10px] text-[#71849e]">
+                    Target: {selectedGraph}
+                  </span>
+                </div>
+                <p className="text-sm sm:text-base font-semibold text-[#102f58] leading-relaxed">
                   {currentObjective}
                 </p>
               </div>
             </div>
           )}
 
-          {/* Live Progress Timeline */}
+          {/* Agent Reasoning & Progress Accordion */}
           {events.length > 0 && (
-            <div className="p-4 rounded-2xl bg-white border border-[#4370aa]/20 shadow-sm space-y-3">
-              <div className="flex items-center justify-between pb-2 border-b border-[#4370aa]/10">
-                <span className="text-xs font-bold text-[#102f58] flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5 text-[#1678ef]" />
-                  <span>Agent Reasoning & Tool Progress</span>
-                </span>
-                <span className="text-[11px] text-[#71849e]">
-                  {events.length} events logged
-                </span>
+            <div className="rounded-2xl border border-[#4370aa]/20 bg-white shadow-xs overflow-hidden transition-all duration-200">
+              {/* Accordion Header / Toggle */}
+              <div
+                onClick={() => setIsReasoningExpanded(!isReasoningExpanded)}
+                className="px-4 py-3 bg-[#fafcff] hover:bg-[#f0f7ff] transition flex items-center justify-between cursor-pointer border-b border-[#4370aa]/10 select-none"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {isInvestigating ? (
+                    <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center animate-spin shrink-0">
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </div>
+                  ) : (
+                    <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="text-xs font-bold text-[#102f58]">
+                      {isInvestigating
+                        ? "Agent Reasoning & Discovery Active..."
+                        : "Agent Reasoning & Tool Progress"}
+                    </span>
+                    <span className="text-[10px] font-semibold text-[#1678ef] bg-[#eff7ff] px-2 py-0.5 rounded-full border border-[#1678ef]/15">
+                      {events.length} {events.length === 1 ? "step" : "steps"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-[#71849e] shrink-0">
+                  <span className="text-[11px] font-medium hidden sm:inline">
+                    {isReasoningExpanded ? "Collapse" : "Expand"}
+                  </span>
+                  {isReasoningExpanded ? (
+                    <ChevronUp className="w-4 h-4 text-[#71849e]" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-[#71849e]" />
+                  )}
+                </div>
               </div>
 
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1 text-xs font-mono">
-                {events.map((ev, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-start gap-2 py-1 px-2 rounded-lg bg-[#f8fbff] border border-[#4370aa]/10"
-                  >
-                    <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 ${
-                        ev.type === "tool_call"
-                          ? "bg-[#eff7ff] text-[#1678ef]"
-                          : ev.type === "tool_result"
-                          ? "bg-emerald-50 text-emerald-700"
-                          : ev.type === "thought"
-                          ? "bg-purple-50 text-purple-700"
-                          : ev.type === "error"
-                          ? "bg-red-50 text-red-700"
-                          : "bg-slate-100 text-slate-700"
-                      }`}
+              {/* Live Step Snippet when collapsed during active run */}
+              {!isReasoningExpanded && isInvestigating && (
+                <div className="px-4 py-2 bg-blue-50/50 text-[11px] font-mono text-blue-700 flex items-center gap-2 border-b border-blue-100/60">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping shrink-0" />
+                  <span className="truncate">{events[events.length - 1]?.message}</span>
+                </div>
+              )}
+
+              {/* Expanded Event Log */}
+              {isReasoningExpanded && (
+                <div className="p-3.5 space-y-1.5 max-h-64 overflow-y-auto font-mono text-xs bg-[#fbfdff]">
+                  {events.map((ev, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-start gap-2.5 py-1.5 px-2.5 rounded-lg bg-white border border-[#4370aa]/10 hover:border-[#1678ef]/20 transition"
                     >
-                      {ev.type}
-                    </span>
-                    <span className="text-[#102f58] break-all">{ev.message}</span>
-                  </div>
-                ))}
-              </div>
+                      <span
+                        className={`text-[9.5px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 ${
+                          ev.type === "tool_call"
+                            ? "bg-[#eff7ff] text-[#1678ef] border border-[#1678ef]/20"
+                            : ev.type === "tool_result"
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            : ev.type === "thought"
+                            ? "bg-purple-50 text-purple-700 border border-purple-200"
+                            : ev.type === "error"
+                            ? "bg-red-50 text-red-700 border border-red-200"
+                            : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {ev.type}
+                      </span>
+                      <span className="text-[#102f58] break-all leading-relaxed text-[11px]">
+                        {ev.message}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -534,15 +711,34 @@ export function Workspace({
                     Verified Grounded Findings
                   </span>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-[#71849e]">
-                  <span className="inline-flex items-center gap-1">
-                    <Zap className="w-3.5 h-3.5 text-[#1678ef]" />
+                <div className="flex items-center gap-2.5 text-xs text-[#71849e]">
+                  <span className="inline-flex items-center gap-1 font-semibold text-[#1678ef]">
+                    <Zap className="w-3.5 h-3.5" />
                     <span>{currentResult.duration_seconds}s</span>
                   </span>
-                  <span>•</span>
+                  <span className="text-slate-300">/</span>
                   <span>{currentResult.total_tool_calls} tool calls</span>
-                  <span>•</span>
-                  <span>{currentResult.evidence_summary?.unique_entities_count || 0} entities grounded</span>
+                  <span className="text-slate-300">/</span>
+                  <span>
+                    {currentResult.evidence_summary?.unique_entities_count || 0} entities grounded
+                  </span>
+
+                  {/* Copy Button */}
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(currentResult.final_answer);
+                      setCopiedAnswer(true);
+                      setTimeout(() => setCopiedAnswer(false), 2000);
+                    }}
+                    className="ml-2 p-1.5 rounded-lg border border-[#4370aa]/20 hover:bg-[#eff7ff] text-[#71849e] hover:text-[#102f58] transition cursor-pointer"
+                    title="Copy markdown findings"
+                  >
+                    {copiedAnswer ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -551,69 +747,134 @@ export function Workspace({
                 <FormattedMarkdown content={currentResult.final_answer} />
               </div>
 
-              {/* Remediation & Action Approval Card */}
-              <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-200/80 shadow-xs space-y-3 mt-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-blue-600" />
-                    <span className="text-xs font-bold text-slate-900">Recommended Remediation Action</span>
-                  </div>
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100/70 text-blue-700">
-                    Decision Memory
-                  </span>
-                </div>
-                
-                <div className="text-xs text-slate-700">
-                  {currentResult.final_answer.toLowerCase().includes("mule") || currentResult.final_answer.toLowerCase().includes("fraud") ? (
-                    <p>• Action: <strong>Freeze suspicious accounts & flag high-risk transaction paths</strong> in payment gateway.</p>
-                  ) : currentResult.final_answer.toLowerCase().includes("cve") || currentResult.final_answer.toLowerCase().includes("vulnerability") ? (
-                    <p>• Action: <strong>Isolate vulnerable host & upgrade package to patched release</strong>.</p>
-                  ) : (
-                    <p>• Action: <strong>Record verified audit findings into compliance memory</strong>.</p>
-                  )}
-                </div>
+              {/* Remediation & Action Approval Card - Only displayed if agent recommended actionable steps */}
+              {(() => {
+                const answer = currentResult.final_answer || "";
+                const match = answer.match(/(?:###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)[\s\S]*)/i);
+                if (!match) return null;
+                const recommendationSnippet = match[0]
+                  .replace(/###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)/i, "")
+                  .trim()
+                  .slice(0, 350);
+                if (!recommendationSnippet) return null;
 
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[11px] text-slate-500">Requires human analyst approval</span>
-                  <button
-                    onClick={() => handleApproveAction("remediation", currentObjective)}
-                    disabled={isApprovingAction || actionApproved}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                      actionApproved
-                        ? "bg-emerald-600 text-white"
-                        : "bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
-                    }`}
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{actionApproved ? "Action Approved & Logged" : "Approve Remediation"}</span>
-                  </button>
-                </div>
-              </div>
+                return (
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-200/80 shadow-xs space-y-3 mt-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-blue-600" />
+                        <span className="text-xs font-bold text-slate-900">Recommended Remediation Action</span>
+                      </div>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100/70 text-blue-700">
+                        Decision Memory
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-slate-700 leading-relaxed">
+                      <FormattedMarkdown content={recommendationSnippet} />
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[11px] text-slate-500">Requires human analyst approval</span>
+                      <button
+                        onClick={() => handleApproveAction("remediation", currentObjective)}
+                        disabled={isApprovingAction || actionApproved}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                          actionApproved
+                            ? "bg-emerald-600 text-white"
+                            : "bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{actionApproved ? "Action Approved & Logged" : "Approve Remediation"}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
 
+        {/* Bottom Follow-up Composer with Floating Stop Button */}
+        <div className="px-4 sm:px-6 pt-3 pb-6 sm:pb-8 border-t border-[#4370aa]/15 bg-gradient-to-t from-white via-white/95 to-transparent shrink-0 relative">
+          <div className="max-w-3xl mx-auto w-full relative">
+            {/* Floating Stop Generating Pill Button (like ChatGPT) */}
+            {isInvestigating && (
+              <div className="absolute -top-5 left-1/2 -translate-x-1/2 z-20">
+                <button
+                  type="button"
+                  onClick={handleStopInvestigation}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold text-slate-700 bg-white border border-slate-300 shadow-md hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition transform hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Square className="w-3 h-3 fill-current text-red-500" />
+                  <span>Stop generating</span>
+                </button>
+              </div>
+            )}
 
-        {/* Bottom Follow-up Composer */}
-        <div className="p-4 border-t border-[#4370aa]/15 bg-[#f6faff]/60 shrink-0">
-          <form onSubmit={handleFormSubmit} className="flex items-center gap-2">
-            <input
-              type="text"
-              value={queryInput}
-              onChange={(e) => setQueryInput(e.target.value)}
-              placeholder="Ask a follow-up or enter a new graph objective..."
-              disabled={isInvestigating}
-              className="flex-1 px-4 py-2.5 rounded-xl border border-[#4370aa]/20 bg-white text-xs sm:text-sm text-[#102f58] placeholder-[#71849e] focus:outline-none focus:ring-2 focus:ring-[#1678ef]/40 disabled:opacity-50 transition"
-            />
-            <button
-              type="submit"
-              disabled={!queryInput.trim() || isInvestigating}
-              className="px-4 py-2.5 rounded-xl bg-[#1678ef] hover:bg-[#1b80ff] disabled:opacity-40 text-white font-semibold text-xs flex items-center gap-1.5 transition shrink-0"
+            <form
+              onSubmit={handleFormSubmit}
+              className="relative flex items-center gap-2.5 p-2 sm:p-2.5 rounded-2xl bg-white border border-[#4370aa]/25 hover:border-[#1678ef]/50 focus-within:border-[#1678ef] focus-within:ring-4 focus-within:ring-[#1678ef]/10 shadow-lg shadow-slate-200/50 transition-all duration-200"
             >
-              <span>Send</span>
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </form>
+              <div className="pl-2.5 flex items-center justify-center text-[#1678ef] shrink-0">
+                <Sparkles className="w-4 h-4 text-[#1678ef]" />
+              </div>
+
+              <input
+                type="text"
+                value={queryInput}
+                onChange={(e) => setQueryInput(e.target.value)}
+                placeholder={
+                  isInvestigating
+                    ? "Investigating across graph... Click Stop to halt or type follow-up..."
+                    : "Ask GraphOS to explore connected entities, trace paths, or investigate..."
+                }
+                className="flex-1 px-1 bg-transparent border-none outline-none text-xs sm:text-sm text-[#102f58] placeholder-[#71849e]/70 font-normal focus:ring-0 focus:outline-none"
+              />
+
+              {queryInput && !isInvestigating && (
+                <button
+                  type="button"
+                  onClick={() => setQueryInput("")}
+                  className="p-1 rounded-full text-[#71849e] hover:text-[#102f58] hover:bg-slate-100 transition cursor-pointer"
+                  title="Clear input"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* Stop button when running, Send button when idle */}
+              {isInvestigating ? (
+                <button
+                  type="button"
+                  onClick={handleStopInvestigation}
+                  className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm hover:scale-105 active:scale-95 cursor-pointer shrink-0"
+                  title="Stop investigation execution"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!queryInput.trim()}
+                  className="w-9 h-9 rounded-xl bg-gradient-to-r from-[#1678ef] to-[#2563eb] text-white flex items-center justify-center hover:scale-105 active:scale-95 transition shadow-md shadow-blue-500/25 disabled:opacity-30 disabled:hover:scale-100 cursor-pointer shrink-0"
+                  title="Send investigation objective"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              )}
+            </form>
+
+            <div className="flex items-center justify-between px-3 mt-1.5 text-[10.5px] text-[#71849e]">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                <span>FalkorDB Read-Only Guardrails Enforced</span>
+              </span>
+              <span className="hidden sm:inline">Press Enter to investigate</span>
+            </div>
+          </div>
         </div>
       </main>
 
@@ -647,21 +908,20 @@ export function Workspace({
         </div>
 
         {/* Tab Body */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-4 flex flex-col">
           {activeTab === "graph" && (
-            <div className="space-y-4">
+            <div className="flex-1 min-h-[580px] flex flex-col">
               <GraphExplorer
                 entities={
                   currentResult?.evidence_summary?.entities && Object.keys(currentResult.evidence_summary.entities).length > 0
                     ? currentResult.evidence_summary.entities
-                    : previewEntities
+                    : previewEntities || EMPTY_ENTITIES
                 }
-                edges={derivedEdges.length > 0 ? derivedEdges : previewEdges}
-                keyPaths={currentResult?.evidence_summary?.key_paths || []}
+                edges={derivedEdges.length > 0 ? derivedEdges : previewEdges || EMPTY_EDGES}
+                keyPaths={currentResult?.evidence_summary?.key_paths || EMPTY_KEY_PATHS}
                 selectedNodeId={selectedEntityId}
                 onSelectNode={setSelectedEntityId}
               />
-
             </div>
           )}
 
@@ -727,55 +987,101 @@ export function Workspace({
 
           {activeTab === "entities" && (
             <div className="space-y-3">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#71849e] block pb-2 border-b border-[#4370aa]/15">
-                Grounded Entities ({currentResult?.evidence_summary?.unique_entities_count || 0})
-              </span>
+              <div className="flex items-center justify-between pb-2 border-b border-[#4370aa]/15">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#71849e]">
+                  {currentResult?.evidence_summary?.entities && Object.keys(currentResult.evidence_summary.entities).length > 0
+                    ? `Grounded Entities (${currentResult.evidence_summary.unique_entities_count || Object.keys(currentResult.evidence_summary.entities).length})`
+                    : `Active Graph Entities (${Object.keys(previewEntities).length})`}
+                </span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#eff7ff] text-[#1678ef]">
+                  {currentResult?.evidence_summary?.entities && Object.keys(currentResult.evidence_summary.entities).length > 0
+                    ? "Investigation Result"
+                    : "FalkorDB Live Sample"}
+                </span>
+              </div>
 
-              {(!currentResult?.evidence_summary?.entities ||
-                Object.keys(currentResult.evidence_summary.entities).length === 0) && (
-                <div className="text-center py-10 text-xs text-[#71849e]">
-                  No entities discovered yet.
-                </div>
-              )}
+              {(() => {
+                const activeEntities = (currentResult?.evidence_summary?.entities && Object.keys(currentResult.evidence_summary.entities).length > 0)
+                  ? currentResult.evidence_summary.entities
+                  : previewEntities;
 
-              {Object.values(currentResult?.evidence_summary?.entities || {}).map((ent) => (
-                <div
-                  key={ent.id}
-                  onClick={() => {
-                    setSelectedEntityId(ent.id);
-                    setActiveTab("graph");
-                  }}
-                  className="p-3.5 rounded-2xl bg-white border border-[#4370aa]/20 hover:border-[#1678ef]/50 cursor-pointer shadow-xs transition space-y-1.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#102f58] truncate">{ent.name || ent.id}</span>
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#eff7ff] text-[#1678ef]">
-                      {ent.kind || "Entity"}
-                    </span>
-                  </div>
-                  <p className="font-mono text-[11px] text-[#71849e]">{ent.id}</p>
-                  {ent.status && (
-                    <div className="flex items-center gap-1 text-[11px] text-[#3b577d]">
-                      <span className="font-medium">Status:</span>
-                      <span className="font-semibold">{ent.status}</span>
+                if (!activeEntities || Object.keys(activeEntities).length === 0) {
+                  return (
+                    <div className="text-center py-10 text-xs text-[#71849e]">
+                      No entities discovered for current graph yet.
                     </div>
-                  )}
-                  {ent.is_isolated && (
-                    <span className="inline-block px-2 py-0.5 rounded bg-amber-50 text-amber-700 text-[10px] font-semibold">
-                      Isolated Node
-                    </span>
-                  )}
-                </div>
-              ))}
+                  );
+                }
+
+                return Object.values(activeEntities).map((ent) => (
+                  <div
+                    key={ent.id}
+                    onClick={() => {
+                      setSelectedEntityId(ent.id);
+                      setActiveTab("graph");
+                    }}
+                    className="p-3.5 rounded-2xl bg-white border border-[#4370aa]/20 hover:border-[#1678ef]/50 cursor-pointer shadow-xs transition space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-[#102f58] truncate">{ent.name || ent.id}</span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#eff7ff] text-[#1678ef]">
+                        {ent.kind || "Entity"}
+                      </span>
+                    </div>
+                    <p className="font-mono text-[11px] text-[#71849e]">{ent.id}</p>
+                    {ent.status && (
+                      <div className="flex items-center gap-1 text-[11px] text-[#3b577d]">
+                        <span className="font-medium">Status:</span>
+                        <span className="font-semibold">{ent.status}</span>
+                      </div>
+                    )}
+                    {ent.properties?.source_graph && (
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[9px] font-mono">
+                        {ent.properties.source_graph}
+                      </span>
+                    )}
+                    {ent.is_isolated && (
+                      <span className="inline-block px-2 py-0.5 rounded bg-amber-50 text-amber-700 text-[10px] font-semibold ml-1">
+                        Isolated Node
+                      </span>
+                    )}
+                  </div>
+                ));
+              })()}
             </div>
           )}
 
           {activeTab === "activity" && (
             <div className="space-y-3">
               <span className="text-xs font-bold uppercase tracking-wider text-[#71849e] block pb-2 border-b border-[#4370aa]/15">
-                MCP Tool Calls ({currentResult?.steps?.reduce((acc, s) => acc + s.tool_calls.length, 0) || 0})
+                MCP Tool Calls ({currentResult?.steps?.reduce((acc, s) => acc + s.tool_calls.length, 0) || events.filter(e => e.type === "tool_call").length || 0})
               </span>
 
+              {(!currentResult?.steps || currentResult.steps.length === 0) && events.filter(e => e.type === "tool_call").length === 0 && (
+                <div className="text-center py-10 text-xs text-[#71849e]">
+                  No tool activity recorded yet. Run an investigation to stream live MCP tool calls.
+                </div>
+              )}
+
+              {/* Live streaming events while running */}
+              {isInvestigating && events.filter(e => e.type === "tool_call" || e.type === "thought").length > 0 && (
+                <div className="p-3 rounded-2xl bg-white border border-[#1678ef]/30 space-y-2 text-xs">
+                  <span className="font-semibold text-[#1678ef] text-[11px] flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-[#1678ef] animate-ping" />
+                    <span>Live Agent Steps In Progress...</span>
+                  </span>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {events.map((ev, evIdx) => (
+                      <div key={evIdx} className="text-[11px] font-mono text-[#102f58] p-1.5 rounded bg-[#f6faff] border border-[#1678ef]/10">
+                        <span className="font-bold text-[#1678ef] uppercase text-[9px] mr-1.5">[{ev.type}]</span>
+                        <span>{ev.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Real steps from completed investigation */}
               {currentResult?.steps?.map((step) => (
                 <div
                   key={step.iteration}
@@ -783,7 +1089,7 @@ export function Workspace({
                 >
                   <div className="flex items-center justify-between text-[#71849e] text-[11px]">
                     <span className="font-semibold">Step {step.iteration}</span>
-                    <span>{step.duration_seconds}s</span>
+                    <span>{step.duration_seconds ? `${step.duration_seconds.toFixed(2)}s` : ""}</span>
                   </div>
                   {step.thought && (
                     <p className="text-[#3b577d] italic">"{step.thought}"</p>

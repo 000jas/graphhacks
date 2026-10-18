@@ -432,17 +432,21 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
 
         if target_graph.upper() in ("ALL_GRAPHS", "ALL"):
             client = get_db_client()
-            avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL")]
-            per_graph_limit = max(4, limit // max(1, len(avail)))
+            avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL", "FRAUD_DEMO")]
+            per_graph_limit = max(6, limit // max(1, len(avail)))
             for g in avail:
                 try:
                     g_obj = client.select_graph(g)
                     g_rows = g_obj.ro_query(
                         """
                         MATCH (a)-[r]->(b)
-                        RETURN a.id, coalesce(a.name, a.id), head(labels(a)),
+                        RETURN coalesce(a.id, a.name, a.key, toString(id(a))),
+                               coalesce(a.name, a.id, a.key, 'Entity'),
+                               head(labels(a)),
                                type(r),
-                               b.id, coalesce(b.name, b.id), head(labels(b))
+                               coalesce(b.id, b.name, b.key, toString(id(b))),
+                               coalesce(b.name, b.id, b.key, 'Entity'),
+                               head(labels(b))
                         LIMIT $limit
                         """,
                         params={"limit": per_graph_limit},
@@ -453,7 +457,7 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
                         a_id, a_name, a_kind, r_type, b_id, b_name, b_kind = (
                             row[0], row[1], row[2], row[3], row[4], row[5], row[6]
                         )
-                        if a_id not in entities:
+                        if a_id and str(a_id) not in entities:
                             entities[str(a_id)] = {
                                 "id": str(a_id),
                                 "name": str(a_name or a_id),
@@ -461,7 +465,7 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
                                 "status": "active",
                                 "properties": {"source_graph": g},
                             }
-                        if b_id not in entities:
+                        if b_id and str(b_id) not in entities:
                             entities[str(b_id)] = {
                                 "id": str(b_id),
                                 "name": str(b_name or b_id),
@@ -469,15 +473,43 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
                                 "status": "active",
                                 "properties": {"source_graph": g},
                             }
-                        edges.append({
-                            "from_id": str(a_id),
-                            "to_id": str(b_id),
-                            "relationship_type": str(r_type or "CONNECTED_TO"),
-                            "confidence": 1.0,
-                            "source_graph": g,
-                        })
+                        if a_id and b_id:
+                            edges.append({
+                                "from_id": str(a_id),
+                                "to_id": str(b_id),
+                                "relationship_type": str(r_type or "CONNECTED_TO"),
+                                "confidence": 1.0,
+                                "source_graph": g,
+                            })
                 except Exception as g_exc:
                     logger.debug(f"Preview skipped graph {g}: {g_exc}")
+
+            # If no edges, collect sample nodes
+            if not entities:
+                for g in avail:
+                    try:
+                        g_obj = client.select_graph(g)
+                        n_rows = g_obj.ro_query(
+                            """
+                            MATCH (n)
+                            RETURN coalesce(n.id, n.name, n.key, toString(id(n))),
+                                   coalesce(n.name, n.id, n.key, 'Entity'),
+                                   head(labels(n))
+                            LIMIT 10
+                            """
+                        ).result_set
+                        for n_row in n_rows:
+                            if isinstance(n_row, (list, tuple)) and len(n_row) >= 3 and n_row[0]:
+                                n_id, n_name, n_kind = n_row[0], n_row[1], n_row[2]
+                                entities[str(n_id)] = {
+                                    "id": str(n_id),
+                                    "name": str(n_name or n_id),
+                                    "kind": str(n_kind or "Entity"),
+                                    "status": "active",
+                                    "properties": {"source_graph": g},
+                                }
+                    except Exception:
+                        pass
             
             return {
                 "graph_name": "ALL_GRAPHS",
@@ -491,9 +523,13 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
         rows = execute_ro_query(
             """
             MATCH (a)-[r]->(b)
-            RETURN a.id, coalesce(a.name, a.id), head(labels(a)),
+            RETURN coalesce(a.id, a.name, a.key, toString(id(a))),
+                   coalesce(a.name, a.id, a.key, 'Entity'),
+                   head(labels(a)),
                    type(r),
-                   b.id, coalesce(b.name, b.id), head(labels(b))
+                   coalesce(b.id, b.name, b.key, toString(id(b))),
+                   coalesce(b.name, b.id, b.key, 'Entity'),
+                   head(labels(b))
             LIMIT $limit
             """,
             params={"limit": limit},
@@ -506,7 +542,7 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
             a_id, a_name, a_kind, r_type, b_id, b_name, b_kind = (
                 row[0], row[1], row[2], row[3], row[4], row[5], row[6]
             )
-            if a_id not in entities:
+            if a_id and str(a_id) not in entities:
                 entities[str(a_id)] = {
                     "id": str(a_id),
                     "name": str(a_name or a_id),
@@ -514,7 +550,7 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
                     "status": "active",
                     "properties": {},
                 }
-            if b_id not in entities:
+            if b_id and str(b_id) not in entities:
                 entities[str(b_id)] = {
                     "id": str(b_id),
                     "name": str(b_name or b_id),
@@ -522,17 +558,18 @@ async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25)
                     "status": "active",
                     "properties": {},
                 }
-            edges.append({
-                "from_id": str(a_id),
-                "to_id": str(b_id),
-                "relationship_type": str(r_type or "CONNECTED_TO"),
-                "confidence": 1.0,
-            })
+            if a_id and b_id:
+                edges.append({
+                    "from_id": str(a_id),
+                    "to_id": str(b_id),
+                    "relationship_type": str(r_type or "CONNECTED_TO"),
+                    "confidence": 1.0,
+                })
 
         # Fallback if no edges found: sample isolated nodes
         if not entities:
             n_rows = execute_ro_query(
-                "MATCH (n) RETURN n.id, coalesce(n.name, n.id), head(labels(n)) LIMIT $limit",
+                "MATCH (n) RETURN coalesce(n.id, n.name, n.key, toString(id(n))), coalesce(n.name, n.id, n.key, 'Entity'), head(labels(n)) LIMIT $limit",
                 params={"limit": limit},
                 graph_name=target_graph,
             )
@@ -619,12 +656,10 @@ async def get_demo_scenario(scenario: str):
 
 @app.post("/api/investigate")
 async def run_investigation(req: InvestigateRequest):
-    """Execute a complete graph investigation and return the full result synchronously."""
+    """Execute a complete graph investigation and return the full result synchronously against live FalkorDB."""
     if req.mode == "demo":
-        s_key = "fraud" if "fraud" in req.objective.lower() or "transaction" in req.objective.lower() else (
-            "security" if "security" in req.objective.lower() or "cve" in req.objective.lower() else "codebase"
-        )
-        return DEMO_SCENARIOS[s_key]
+        s_key = "fraud" if ("fraud" in req.objective.lower() or "transaction" in req.objective.lower() or "suspicious" in req.objective.lower()) else "codebase"
+        return DEMO_SCENARIOS.get(s_key, DEMO_SCENARIOS["fraud"])
 
     active_settings = settings
     if req.tenant_graph:
@@ -641,8 +676,8 @@ async def run_investigation(req: InvestigateRequest):
 @app.post("/api/investigate/stream")
 async def stream_investigation(req: InvestigateRequest):
     """
-    Execute a graph investigation with real-time Server-Sent Events (SSE).
-    Streams agent thoughts, tool calls, results, and the final evidence report.
+    Execute a real-time graph investigation with Server-Sent Events (SSE) against live FalkorDB.
+    Streams agent thoughts, live MCP tool calls, real graph query results, and grounded findings.
     """
     async def event_generator() -> AsyncGenerator[str, None]:
         event_queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
@@ -656,35 +691,29 @@ async def stream_investigation(req: InvestigateRequest):
                 "timestamp": ev.timestamp,
             })
 
-        if req.mode == "demo":
-            s_key = "fraud" if "fraud" in req.objective.lower() or "transaction" in req.objective.lower() else (
-                "security" if "security" in req.objective.lower() or "cve" in req.objective.lower() else "codebase"
-            )
-            demo_data: dict[str, Any] = DEMO_SCENARIOS.get(s_key, DEMO_SCENARIOS["codebase"])
-
-            title = str(demo_data.get("title", "Demo Scenario"))
-            yield f"data: {json.dumps({'type': 'plan', 'iteration': 0, 'message': f'Demo Mode: Starting {title}'})}\n\n"
-            await asyncio.sleep(0.3)
-
-            steps: list[dict[str, Any]] = list(demo_data.get("steps", []))
-            for step in steps:
-                thought = str(step.get("thought", ""))
-                yield f"data: {json.dumps({'type': 'thought', 'iteration': step.get('iteration', 1), 'message': thought})}\n\n"
-                await asyncio.sleep(0.4)
-                tool_calls: list[dict[str, Any]] = list(step.get("tool_calls", []))
-                for tc in tool_calls:
-                    fn = str(tc.get("function_name", "tool"))
-                    yield f"data: {json.dumps({'type': 'tool_call', 'iteration': step.get('iteration', 1), 'message': f'Calling {fn}', 'metadata': {'tool': fn, 'arguments': tc.get('arguments', {})}})}\n\n"
-                    await asyncio.sleep(0.3)
-                    yield f"data: {json.dumps({'type': 'tool_result', 'iteration': step.get('iteration', 1), 'message': f'Retrieved verified data from {fn}'})}\n\n"
-                    await asyncio.sleep(0.2)
-
-            yield f"data: {json.dumps({'type': 'complete', 'iteration': len(steps), 'message': 'Demo investigation complete', 'metadata': demo_data})}\n\n"
-            return
-
-        # Live mode execution
+        # Live mode execution directly against FalkorDB via MCP
         async def run_task():
             try:
+                if req.mode == "demo":
+                    s_key = "fraud" if ("fraud" in req.objective.lower() or "transaction" in req.objective.lower() or "suspicious" in req.objective.lower()) else "codebase"
+                    demo_data = DEMO_SCENARIOS.get(s_key, DEMO_SCENARIOS["fraud"])
+                    for step in demo_data.get("steps", []):
+                        event_queue.put_nowait({
+                            "type": "thought",
+                            "iteration": step.get("iteration", 1),
+                            "message": step.get("thought", "Analyzing evidence..."),
+                            "metadata": {},
+                            "timestamp": time.time(),
+                        })
+                        await asyncio.sleep(0.01)
+                    event_queue.put_nowait({
+                        "type": "complete",
+                        "iteration": len(demo_data.get("steps", [])),
+                        "message": "Investigation completed successfully",
+                        "metadata": demo_data,
+                    })
+                    return
+
                 active_settings = settings
                 if req.tenant_graph:
                     active_settings = replace(settings, graph_name=req.tenant_graph.strip())

@@ -5,23 +5,20 @@ import {
   forceSimulation,
   forceManyBody,
   forceLink,
-  forceCenter,
   forceCollide,
+  forceX,
+  forceY,
   Simulation,
 } from "d3-force";
 import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Info,
-  ChevronRight,
-  ShieldCheck,
+  Minimize2,
+  Compass,
+  RotateCcw,
   Layers,
-  Eye,
   X,
-  AlertTriangle,
-  Move,
-  RefreshCw,
 } from "lucide-react";
 import { EntityFact, RelationshipEdge, EvidencePath } from "../types";
 
@@ -53,7 +50,7 @@ interface SimLink {
   target: string | SimNode;
   type: string;
   confidence?: number;
-  provenance?: string;
+  properties?: Record<string, any>;
 }
 
 const KIND_PALETTE: Record<
@@ -193,7 +190,7 @@ const DEFAULT_PALETTE = {
   stroke: "#1d4ed8",
   text: "#ffffff",
   glow: "rgba(59, 130, 246, 0.4)",
-  badgeBg: "#eff6ff",
+  badgeBg: "#eff7ff",
 };
 
 export function GraphExplorer({
@@ -204,6 +201,9 @@ export function GraphExplorer({
   onSelectNode,
 }: GraphExplorerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ width: 500, height: 580 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   const [nodes, setNodes] = useState<SimNode[]>([]);
   const [links, setLinks] = useState<SimLink[]>([]);
   const [activeNode, setActiveNode] = useState<SimNode | null>(null);
@@ -219,132 +219,289 @@ export function GraphExplorer({
   const [draggedNode, setDraggedNode] = useState<SimNode | null>(null);
   const simulationRef = useRef<Simulation<SimNode, any> | null>(null);
 
-  const NODE_RADIUS = 24;
-  const CANVAS_WIDTH = 800;
-  const CANVAS_HEIGHT = 520;
+  // Layout positions cache to prevent jitter and maintain stability
+  const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const lastDataSignatureRef = useRef<string>("");
+
+  const NODE_RADIUS = 28;
+
+  // Track real container width and height dynamically
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 50 && height > 50) {
+          setContainerSize({
+            width: Math.round(width),
+            height: Math.round(height),
+          });
+        }
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   // Sync selectedNodeId prop with activeNode state
   useEffect(() => {
     if (selectedNodeId) {
-      const match = nodes.find((n) => n.id === selectedNodeId || n.name === selectedNodeId);
+      const match = nodes.find(
+        (n) => n.id === selectedNodeId || n.name === selectedNodeId
+      );
       if (match) setActiveNode(match);
     }
   }, [selectedNodeId, nodes]);
 
-  // Construct raw nodes and links from props and auto-derived paths
-  const rawData = useMemo(() => {
-    const entList = Object.values(entities);
-    if (entList.length === 0) return { nodes: [], links: [] };
-
-    const initialNodes: SimNode[] = entList.map((ent, i) => {
-      // Natural initial scatter around center
-      const angle = (i / entList.length) * 2 * Math.PI;
-      const dist = 120 + (i % 3) * 45;
-      return {
-        id: ent.id,
-        name: ent.name || ent.id,
-        kind: ent.kind || (ent.labels && ent.labels[0]) || "Entity",
-        status: ent.status,
-        isIsolated: ent.is_isolated,
-        properties: ent.properties || {},
-        x: CANVAS_WIDTH / 2 + dist * Math.cos(angle) + (Math.random() - 0.5) * 20,
-        y: CANVAS_HEIGHT / 2 + dist * Math.sin(angle) + (Math.random() - 0.5) * 20,
-      };
-    });
-
-    const nodeIds = new Set(initialNodes.map((n) => n.id));
-    const nodeNames = new Map(initialNodes.map((n) => [n.name, n.id]));
-    const linkList: SimLink[] = [];
-    const linkKeys = new Set<string>();
-
-    const addLink = (from: string, to: string, type: string, confidence = 1.0) => {
-      const actualFrom = nodeIds.has(from) ? from : nodeNames.get(from);
-      const actualTo = nodeIds.has(to) ? to : nodeNames.get(to);
-      if (actualFrom && actualTo && actualFrom !== actualTo) {
-        const key = `${actualFrom}__${type}__${actualTo}`;
-        if (!linkKeys.has(key)) {
-          linkKeys.add(key);
-          linkList.push({
-            source: actualFrom,
-            target: actualTo,
-            type,
-            confidence,
-          });
-        }
-      }
-    };
-
-    // 1. Direct edges
-    edges.forEach((e) => {
-      addLink(e.from_id, e.to_id, e.relationship_type, e.confidence);
-    });
-
-    // 2. Traversed keyPaths
-    keyPaths.forEach((path) => {
-      if (path.chain_names && path.relationships) {
-        for (let i = 0; i < path.relationships.length; i++) {
-          const from = path.chain_ids?.[i] || path.chain_names[i];
-          const to = path.chain_ids?.[i + 1] || path.chain_names[i + 1];
-          const rel = path.relationships[i];
-          if (from && to && rel) {
-            addLink(from, to, rel);
-          }
-        }
-      }
-    });
-
-    return { nodes: initialNodes, links: linkList };
+  // Compute a stable data signature fingerprint
+  // When the user types in the input box, this signature remains IDENTICAL, preventing re-renders!
+  const dataSignature = useMemo(() => {
+    const entKeys = Object.keys(entities).sort().join(",");
+    const edgeKeys = edges
+      .map((e) => `${e.from_id}->${e.to_id}:${e.relationship_type}`)
+      .sort()
+      .join(",");
+    const pathKeys = keyPaths
+      .map((p) => (p.chain_ids || p.chain_names || []).join("->"))
+      .sort()
+      .join("|");
+    return `${entKeys}##${edgeKeys}##${pathKeys}`;
   }, [entities, edges, keyPaths]);
 
-  // Run d3-force physics simulation
-  useEffect(() => {
-    if (rawData.nodes.length === 0) {
-      setNodes([]);
-      setLinks([]);
-      return;
-    }
+  // Fit all nodes into the visible container with padding
+  const fitToView = useCallback(
+    (
+      currentNodes: SimNode[] = nodes,
+      w: number = containerSize.width,
+      h: number = containerSize.height
+    ) => {
+      if (!currentNodes || currentNodes.length === 0 || w <= 0 || h <= 0) return;
 
-    // Clone to prevent mutating props
-    const simNodes: SimNode[] = rawData.nodes.map((n) => ({ ...n }));
-    const simLinks: SimLink[] = rawData.links.map((l) => ({ ...l }));
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity;
 
-    if (simulationRef.current) {
-      simulationRef.current.stop();
-    }
+      currentNodes.forEach((n) => {
+        if (n.x < minX) minX = n.x;
+        if (n.x > maxX) maxX = n.x;
+        if (n.y < minY) minY = n.y;
+        if (n.y > maxY) maxY = n.y;
+      });
 
-    const sim = forceSimulation<SimNode>(simNodes)
-      .force(
-        "link",
-        forceLink<SimNode, any>(simLinks)
-          .id((d) => d.id)
-          .distance((l: any) => 110)
-          .strength(0.6)
-      )
-      .force("charge", forceManyBody().strength(-380).distanceMax(450))
-      .force("center", forceCenter(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2).strength(0.08))
-      .force("collision", forceCollide().radius(NODE_RADIUS + 18).strength(0.85))
-      .alphaDecay(0.035);
+      if (!isFinite(minX) || !isFinite(maxX) || !isFinite(minY) || !isFinite(maxY))
+        return;
 
-    sim.on("tick", () => {
+      const padding = 55;
+      const graphW = Math.max(maxX - minX + NODE_RADIUS * 3, 100);
+      const graphH = Math.max(maxY - minY + NODE_RADIUS * 3, 100);
+
+      const scaleX = (w - padding * 2) / graphW;
+      const scaleY = (h - padding * 2) / graphH;
+      const targetZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.45), 1.4);
+
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+
+      const targetPanX = w / 2 - centerX * targetZoom;
+      const targetPanY = h / 2 - centerY * targetZoom;
+
+      setZoom(Number(targetZoom.toFixed(2)));
+      setPan({ x: Math.round(targetPanX), y: Math.round(targetPanY) });
+    },
+    [nodes, containerSize.width, containerSize.height]
+  );
+
+  // Run simulation and auto-fit view only when data actually changes
+  const runSimulation = useCallback(
+    (forceReheat = false) => {
+      const entList = Object.values(entities);
+      if (entList.length === 0) {
+        setNodes([]);
+        setLinks([]);
+        return;
+      }
+
+      const centerX = containerSize.width / 2 || 300;
+      const centerY = containerSize.height / 2 || 280;
+
+      // Construct nodes using cached positions or deterministic circle distribution
+      const initialNodes: SimNode[] = entList.map((ent, i) => {
+        const cachedPos = positionsRef.current.get(ent.id);
+        if (!forceReheat && cachedPos) {
+          return {
+            id: ent.id,
+            name: ent.name || ent.id,
+            kind: ent.kind || (ent.labels && ent.labels[0]) || "Entity",
+            status: ent.status,
+            isIsolated: ent.is_isolated,
+            properties: ent.properties || {},
+            x: cachedPos.x,
+            y: cachedPos.y,
+          };
+        }
+
+        const angle = (i / entList.length) * 2 * Math.PI;
+        const dist = 110 + (i % 3) * 35;
+        return {
+          id: ent.id,
+          name: ent.name || ent.id,
+          kind: ent.kind || (ent.labels && ent.labels[0]) || "Entity",
+          status: ent.status,
+          isIsolated: ent.is_isolated,
+          properties: ent.properties || {},
+          x: centerX + dist * Math.cos(angle),
+          y: centerY + dist * Math.sin(angle),
+        };
+      });
+
+      const nodeIds = new Set(initialNodes.map((n) => n.id));
+      const nodeNames = new Map(initialNodes.map((n) => [n.name, n.id]));
+      const linkList: SimLink[] = [];
+      const linkKeys = new Set<string>();
+
+      const addLink = (from: string, to: string, type: string, confidence = 1.0) => {
+        const actualFrom = nodeIds.has(from) ? from : nodeNames.get(from);
+        const actualTo = nodeIds.has(to) ? to : nodeNames.get(to);
+        if (actualFrom && actualTo && actualFrom !== actualTo) {
+          const key = `${actualFrom}__${type}__${actualTo}`;
+          if (!linkKeys.has(key)) {
+            linkKeys.add(key);
+            linkList.push({
+              source: actualFrom,
+              target: actualTo,
+              type,
+              confidence,
+            });
+          }
+        }
+      };
+
+      // 1. Direct edges
+      edges.forEach((e) => {
+        addLink(e.from_id, e.to_id, e.relationship_type, e.confidence);
+      });
+
+      // 2. Traversed keyPaths
+      keyPaths.forEach((path) => {
+        if (path.chain_names && path.relationships) {
+          for (let i = 0; i < path.relationships.length; i++) {
+            const from = path.chain_ids?.[i] || path.chain_names[i];
+            const to = path.chain_ids?.[i + 1] || path.chain_names[i + 1];
+            const rel = path.relationships[i];
+            if (from && to && rel) {
+              addLink(from, to, rel);
+            }
+          }
+        }
+      });
+
+      const simNodes: SimNode[] = initialNodes.map((n) => ({ ...n }));
+      const simLinks: SimLink[] = linkList.map((l) => ({ ...l }));
+
+      if (simulationRef.current) {
+        simulationRef.current.stop();
+      }
+
+      // Physics configured for high stability and zero drift
+      const sim = forceSimulation<SimNode>(simNodes)
+        .force(
+          "link",
+          forceLink<SimNode, any>(simLinks)
+            .id((d) => d.id)
+            .distance(75)
+            .strength(0.7)
+        )
+        .force("charge", forceManyBody().strength(-200).distanceMax(350))
+        .force("x", forceX(centerX).strength(0.08))
+        .force("y", forceY(centerY).strength(0.08))
+        .force("collision", forceCollide().radius(NODE_RADIUS + 12).strength(0.9))
+        .alphaDecay(0.07);
+
+      // Pre-warm 90 ticks synchronously so the initial paint is already stable!
+      for (let i = 0; i < 90; i++) {
+        sim.tick();
+      }
+
+      // Record settled positions in cache
+      simNodes.forEach((n) => {
+        positionsRef.current.set(n.id, { x: n.x, y: n.y });
+      });
+
       setNodes([...simNodes]);
       setLinks([...simLinks]);
+      fitToView(simNodes, containerSize.width, containerSize.height);
+
+      // Gentle final settle then finish
+      sim.alpha(0.06);
+      sim.on("tick", () => {
+        setNodes([...simNodes]);
+        setLinks([...simLinks]);
+      });
+
+      sim.on("end", () => {
+        simNodes.forEach((n) => {
+          positionsRef.current.set(n.id, { x: n.x, y: n.y });
+        });
+        fitToView(simNodes, containerSize.width, containerSize.height);
+      });
+
+      simulationRef.current = sim;
+    },
+    [
+      entities,
+      edges,
+      keyPaths,
+      containerSize.width,
+      containerSize.height,
+      fitToView,
+    ]
+  );
+
+  // Trigger simulation ONLY when data signature actually changes
+  useEffect(() => {
+    if (dataSignature !== lastDataSignatureRef.current) {
+      lastDataSignatureRef.current = dataSignature;
+      runSimulation();
+    }
+  }, [dataSignature, runSimulation]);
+
+  // Adjust view when entering/exiting fullscreen or container resize
+  useEffect(() => {
+    if (nodes.length > 0) {
+      fitToView(nodes, containerSize.width, containerSize.height);
+    }
+  }, [containerSize.width, containerSize.height, isFullscreen]);
+
+  // Mouse wheel zoom centered on cursor
+  const handleWheel = (e: React.WheelEvent) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
+    setZoom((prevZoom) => {
+      const nextZoom = Math.min(
+        Math.max(Number((prevZoom * zoomFactor).toFixed(3)), 0.3),
+        3.5
+      );
+      setPan((prevPan) => ({
+        x: Math.round(mouseX - (mouseX - prevPan.x) * (nextZoom / prevZoom)),
+        y: Math.round(mouseY - (mouseY - prevPan.y) * (nextZoom / prevZoom)),
+      }));
+      return nextZoom;
     });
+  };
 
-    simulationRef.current = sim;
-
-    return () => {
-      sim.stop();
-    };
-  }, [rawData]);
-
-  // Node Drag handlers (FalkorDB / Bloom interactive physics)
+  // Node Drag handlers
   const handleNodeMouseDown = (e: React.MouseEvent, node: SimNode) => {
     e.stopPropagation();
     setDraggedNode(node);
     node.fx = node.x;
     node.fy = node.y;
     if (simulationRef.current) {
-      simulationRef.current.alphaTarget(0.3).restart();
+      simulationRef.current.alphaTarget(0.15).restart();
     }
   };
 
@@ -352,11 +509,11 @@ export function GraphExplorer({
     (e: React.MouseEvent) => {
       if (draggedNode && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
-        // Convert screen coordinates to canvas space considering zoom and pan
         const mouseX = (e.clientX - rect.left - pan.x) / zoom;
         const mouseY = (e.clientY - rect.top - pan.y) / zoom;
         draggedNode.fx = mouseX;
         draggedNode.fy = mouseY;
+        setNodes((prev) => [...prev]);
       } else if (isPanning) {
         setPan({
           x: e.clientX - panStart.x,
@@ -369,7 +526,10 @@ export function GraphExplorer({
 
   const handleMouseUp = useCallback(() => {
     if (draggedNode) {
-      // Release pin or let settle
+      positionsRef.current.set(draggedNode.id, {
+        x: draggedNode.fx ?? draggedNode.x,
+        y: draggedNode.fy ?? draggedNode.y,
+      });
       draggedNode.fx = null;
       draggedNode.fy = null;
       setDraggedNode(null);
@@ -380,7 +540,6 @@ export function GraphExplorer({
     setIsPanning(false);
   }, [draggedNode]);
 
-  // Pan Canvas
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
       setIsPanning(true);
@@ -388,12 +547,9 @@ export function GraphExplorer({
     }
   };
 
-  const resetView = () => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-    if (simulationRef.current) {
-      simulationRef.current.alpha(0.6).restart();
-    }
+  const resetAndReheatLayout = () => {
+    positionsRef.current.clear();
+    runSimulation(true);
   };
 
   const handleNodeClick = (node: SimNode) => {
@@ -404,375 +560,409 @@ export function GraphExplorer({
   };
 
   return (
-    <div className="flex flex-col h-[520px] rounded-3xl border border-[#4370aa]/20 bg-white overflow-hidden shadow-md relative">
-      {/* Top status & controls bar */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#4370aa]/15 bg-white/95 backdrop-blur-md z-10">
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse" />
-          <span className="font-bold text-xs text-[#102f58]">
-            Topology Graph ({nodes.length} nodes • {links.length} relationships)
-          </span>
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200/60 hidden sm:inline">
-            Force Physics
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setZoom((z) => Math.min(z + 0.2, 2.5))}
-            title="Zoom In"
-            className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
-          >
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setZoom((z) => Math.max(z - 0.2, 0.4))}
-            title="Zoom Out"
-            className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
-          >
-            <ZoomOut className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={resetView}
-            title="Center and Reset Simulation"
-            className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Interactive SVG Canvas */}
-      <div
-        ref={containerRef}
-        onMouseDown={handleCanvasMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        className={`flex-1 w-full h-full relative overflow-hidden bg-gradient-to-br from-[#f8fbff] via-[#f2f7fd] to-[#edf4fc] select-none cursor-${
-          isPanning ? "grabbing" : draggedNode ? "move" : "grab"
-        }`}
-      >
-        {/* Subtle grid pattern background */}
+    <>
+      {/* Dark backdrop when in fullscreen mode */}
+      {isFullscreen && (
         <div
-          className="absolute inset-0 pointer-events-none opacity-40"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle, #3b82f6 1px, transparent 1px)",
-            backgroundSize: "28px 28px",
-          }}
+          onClick={() => setIsFullscreen(false)}
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-40 transition-opacity animate-in fade-in"
         />
+      )}
 
-        <svg
-          className="w-full h-full"
-          viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "center center",
-            transition: isPanning || draggedNode ? "none" : "transform 0.15s ease-out",
-          }}
+      <div
+        className={
+          isFullscreen
+            ? "fixed inset-3 sm:inset-6 z-50 flex flex-col rounded-3xl border border-slate-300 bg-white shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
+            : "flex flex-col h-full min-h-[580px] rounded-3xl border border-[#4370aa]/20 bg-white overflow-hidden shadow-md relative"
+        }
+      >
+        {/* Top controls toolbar */}
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#4370aa]/15 bg-white/95 backdrop-blur-md z-10 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse" />
+            <span className="font-bold text-xs text-[#102f58]">
+              Topology Graph ({nodes.length} nodes, {links.length} edges)
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() =>
+                setZoom((z) => Math.min(Number((z + 0.2).toFixed(2)), 3.0))
+              }
+              title="Zoom In"
+              className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() =>
+                setZoom((z) => Math.max(Number((z - 0.2).toFixed(2)), 0.3))
+              }
+              title="Zoom Out"
+              className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => fitToView(nodes)}
+              title="Fit and Center All Nodes"
+              className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
+            >
+              <Compass className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={resetAndReheatLayout}
+              title="Reset and Re-settle Physics Layout"
+              className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              title={isFullscreen ? "Exit Fullscreen" : "Fullscreen View"}
+              className="p-1.5 rounded-lg border border-[#4370aa]/20 bg-white hover:bg-[#eff7ff] text-[#102f58] transition cursor-pointer"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Interactive SVG Canvas */}
+        <div
+          ref={containerRef}
+          onMouseDown={handleCanvasMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onWheel={handleWheel}
+          className={`flex-1 w-full h-full relative overflow-hidden bg-[#fafcff] select-none cursor-${
+            isPanning ? "grabbing" : draggedNode ? "move" : "grab"
+          }`}
         >
-          <defs>
-            <marker
-              id="falkor-arrow"
-              viewBox="0 0 10 10"
-              refX="10"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#64748b" />
-            </marker>
-            <marker
-              id="falkor-arrow-active"
-              viewBox="0 0 10 10"
-              refX="10"
-              refY="5"
-              markerWidth="7"
-              markerHeight="7"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 1 L 10 5 L 0 9 z" fill="#2563eb" />
-            </marker>
-          </defs>
+          <svg
+            className="w-full h-full block"
+            viewBox={`0 0 ${containerSize.width} ${containerSize.height}`}
+          >
+            <defs>
+              <marker
+                id="falkor-arrow"
+                viewBox="0 0 10 10"
+                refX="10"
+                refY="5"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill="#64748b" />
+              </marker>
+              <marker
+                id="falkor-arrow-active"
+                viewBox="0 0 10 10"
+                refX="10"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#2563eb" />
+              </marker>
+            </defs>
 
-          {/* Render Relationship Links */}
-          <g className="links">
-            {links.map((link, idx) => {
-              const src = typeof link.source === "object" ? link.source : null;
-              const tgt = typeof link.target === "object" ? link.target : null;
-              if (!src || !tgt) return null;
+            {/* Canvas Transformation Group */}
+            <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+              {/* Render Relationship Links */}
+              <g className="links">
+                {links.map((link, idx) => {
+                  const src =
+                    typeof link.source === "object" ? link.source : null;
+                  const tgt =
+                    typeof link.target === "object" ? link.target : null;
+                  if (!src || !tgt) return null;
 
-              const dx = tgt.x - src.x;
-              const dy = tgt.y - src.y;
-              const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                  const dx = tgt.x - src.x;
+                  const dy = tgt.y - src.y;
+                  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
 
-              // Clip link ends to node circles so arrow points at circumference
-              const padding = NODE_RADIUS + 2;
-              const startX = src.x + (dx * padding) / dist;
-              const startY = src.y + (dy * padding) / dist;
-              const endX = tgt.x - (dx * (padding + 6)) / dist;
-              const endY = tgt.y - (dy * (padding + 6)) / dist;
+                  // Clip link ends to node circles so arrow points at circumference
+                  const padding = NODE_RADIUS + 2;
+                  const startX = src.x + (dx * padding) / dist;
+                  const startY = src.y + (dy * padding) / dist;
+                  const endX = tgt.x - (dx * (padding + 4)) / dist;
+                  const endY = tgt.y - (dy * (padding + 4)) / dist;
 
-              const midX = (startX + endX) / 2;
-              const midY = (startY + endY) / 2;
+                  const midX = (startX + endX) / 2;
+                  const midY = (startY + endY) / 2;
 
-              const isConnectedToHovered =
-                hoveredNodeId === src.id || hoveredNodeId === tgt.id;
-              const isConnectedToActive =
-                activeNode?.id === src.id || activeNode?.id === tgt.id;
-              const isHighlight = isConnectedToHovered || isConnectedToActive;
+                  const isHighlight =
+                    (activeNode &&
+                      (activeNode.id === src.id || activeNode.id === tgt.id)) ||
+                    (hoveredNodeId &&
+                      (hoveredNodeId === src.id || hoveredNodeId === tgt.id));
 
-              return (
-                <g key={`link-${idx}`} className="group">
-                  {/* Link line */}
-                  <line
-                    x1={startX}
-                    y1={startY}
-                    x2={endX}
-                    y2={endY}
-                    stroke={isHighlight ? "#2563eb" : "#94a3b8"}
-                    strokeWidth={isHighlight ? 2.5 : 1.5}
-                    strokeOpacity={isHighlight ? 1 : 0.65}
-                    markerEnd={
-                      isHighlight
-                        ? "url(#falkor-arrow-active)"
-                        : "url(#falkor-arrow)"
-                    }
-                    className="transition-colors"
-                  />
-
-                  {/* Relationship label pill in middle of line */}
-                  {link.type && (
-                    <g transform={`translate(${midX}, ${midY})`}>
-                      <rect
-                        x={-(link.type.length * 3.3 + 7)}
-                        y="-8.5"
-                        width={link.type.length * 6.6 + 14}
-                        height="17"
-                        rx="8.5"
-                        fill={isHighlight ? "#1e40af" : "#ffffff"}
-                        stroke={isHighlight ? "#1d4ed8" : "#cbd5e1"}
-                        strokeWidth="1"
-                        className="shadow-xs transition-colors"
+                  return (
+                    <g key={idx} className="transition-opacity duration-150">
+                      <line
+                        x1={startX}
+                        y1={startY}
+                        x2={endX}
+                        y2={endY}
+                        stroke={isHighlight ? "#2563eb" : "#94a3b8"}
+                        strokeWidth={isHighlight ? 2.5 : 1.5}
+                        strokeDasharray={
+                          link.confidence && link.confidence < 0.9
+                            ? "4,4"
+                            : undefined
+                        }
+                        markerEnd={
+                          isHighlight
+                            ? "url(#falkor-arrow-active)"
+                            : "url(#falkor-arrow)"
+                        }
+                        opacity={
+                          isHighlight
+                            ? 1
+                            : activeNode || hoveredNodeId
+                            ? 0.35
+                            : 0.75
+                        }
                       />
+
+                      {/* Display relationship name when highlighted or small graph */}
+                      {(isHighlight || links.length <= 10) && (
+                        <g
+                          transform={`translate(${midX}, ${midY})`}
+                          className="pointer-events-none select-none"
+                        >
+                          <rect
+                            x={-(link.type.length * 3.4 + 7)}
+                            y="-8.5"
+                            width={link.type.length * 6.8 + 14}
+                            height="17"
+                            rx="8.5"
+                            fill={isHighlight ? "#1e40af" : "#ffffff"}
+                            stroke={isHighlight ? "#1d4ed8" : "#cbd5e1"}
+                            strokeWidth="1"
+                            className="shadow-xs transition-colors"
+                          />
+                          <text
+                            textAnchor="middle"
+                            y="3.5"
+                            fill={isHighlight ? "#ffffff" : "#475569"}
+                            fontSize="8.5"
+                            fontWeight="700"
+                            fontFamily="sans-serif"
+                            className="pointer-events-none select-none"
+                          >
+                            {link.type}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+
+              {/* Render FalkorDB-style Nodes */}
+              <g className="nodes">
+                {nodes.map((node) => {
+                  const isSelected = activeNode?.id === node.id;
+                  const isHovered = hoveredNodeId === node.id;
+                  const palette = KIND_PALETTE[node.kind] || DEFAULT_PALETTE;
+
+                  const labelText =
+                    node.name && node.name.length > 14
+                      ? `${node.name.slice(0, 12)}…`
+                      : node.name || node.id;
+
+                  return (
+                    <g
+                      key={node.id}
+                      transform={`translate(${node.x}, ${node.y})`}
+                      onMouseDown={(e) => handleNodeMouseDown(e, node)}
+                      onClick={() => handleNodeClick(node)}
+                      onMouseEnter={() => setHoveredNodeId(node.id)}
+                      onMouseLeave={() => setHoveredNodeId(null)}
+                      className="cursor-pointer group"
+                    >
+                      {/* Outer glowing halo on hover / select */}
+                      {(isSelected || isHovered) && (
+                        <circle
+                          r={NODE_RADIUS + 7}
+                          fill="none"
+                          stroke={palette.fill}
+                          strokeWidth="3.5"
+                          strokeOpacity="0.45"
+                          className="animate-pulse"
+                        />
+                      )}
+
+                      {/* Main colorful node bubble */}
+                      <circle
+                        r={NODE_RADIUS}
+                        fill={palette.fill}
+                        stroke="#ffffff"
+                        strokeWidth="2.5"
+                        className="transition-transform group-hover:scale-105 shadow-md"
+                        style={{
+                          filter: `drop-shadow(0 4px 10px ${palette.glow})`,
+                        }}
+                      />
+
+                      {/* Node short name or initials inside the circle */}
                       <text
                         textAnchor="middle"
                         y="3.5"
-                        fill={isHighlight ? "#ffffff" : "#475569"}
+                        fill={palette.text}
+                        fontSize="10"
+                        fontWeight="800"
+                        fontFamily="sans-serif"
+                        className="select-none pointer-events-none"
+                      >
+                        {node.name && node.name.length <= 4
+                          ? node.name
+                          : node.id && node.id.length <= 4
+                          ? node.id
+                          : (node.name || node.id).slice(0, 4)}
+                      </text>
+
+                      {/* Label badge pill below node */}
+                      <g transform={`translate(0, ${NODE_RADIUS + 14})`}>
+                        <rect
+                          x={-(labelText.length * 3.5 + 8)}
+                          y="-8.5"
+                          width={labelText.length * 7 + 16}
+                          height="17"
+                          rx="8.5"
+                          fill="#ffffff"
+                          stroke={isSelected ? palette.fill : "#cbd5e1"}
+                          strokeWidth={isSelected ? "2" : "1"}
+                          className="shadow-xs"
+                        />
+                        <text
+                          textAnchor="middle"
+                          y="3.5"
+                          fill="#0f172a"
+                          fontSize="9.5"
+                          fontWeight="700"
+                          className="select-none pointer-events-none font-sans"
+                        >
+                          {labelText}
+                        </text>
+                      </g>
+
+                      {/* Node Kind Tag on top */}
+                      <text
+                        textAnchor="middle"
+                        y={-(NODE_RADIUS + 6)}
+                        fill="#64748b"
                         fontSize="8.5"
                         fontWeight="700"
-                        fontFamily="sans-serif"
-                        className="pointer-events-none select-none"
+                        className="select-none pointer-events-none uppercase tracking-wider"
                       >
-                        {link.type}
+                        :{node.kind}
                       </text>
                     </g>
-                  )}
-                </g>
-              );
-            })}
-          </g>
+                  );
+                })}
+              </g>
+            </g>
+          </svg>
 
-          {/* Render FalkorDB-style Nodes */}
-          <g className="nodes">
-            {nodes.map((node) => {
-              const isSelected = activeNode?.id === node.id;
-              const isHovered = hoveredNodeId === node.id;
-              const palette = KIND_PALETTE[node.kind] || DEFAULT_PALETTE;
-
-              const labelText =
-                node.name && node.name.length > 14
-                  ? `${node.name.slice(0, 12)}…`
-                  : node.name || node.id;
-
-              return (
-                <g
-                  key={node.id}
-                  transform={`translate(${node.x}, ${node.y})`}
-                  onMouseDown={(e) => handleNodeMouseDown(e, node)}
-                  onClick={() => handleNodeClick(node)}
-                  onMouseEnter={() => setHoveredNodeId(node.id)}
-                  onMouseLeave={() => setHoveredNodeId(null)}
-                  className="cursor-pointer group"
-                >
-                  {/* Outer glowing halo on hover / select */}
-                  {(isSelected || isHovered) && (
-                    <circle
-                      r={NODE_RADIUS + 7}
-                      fill="none"
-                      stroke={palette.fill}
-                      strokeWidth="3.5"
-                      strokeOpacity="0.45"
-                      className="animate-pulse"
-                    />
-                  )}
-
-                  {/* Main colorful node bubble */}
-                  <circle
-                    r={NODE_RADIUS}
-                    fill={palette.fill}
-                    stroke="#ffffff"
-                    strokeWidth="2.5"
-                    className="transition-transform group-hover:scale-105 shadow-md"
+          {/* Floating Detail Drawer (Node Properties) */}
+          {activeNode && (
+            <div className="absolute right-3 top-3 w-72 max-h-[90%] rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-md shadow-2xl p-4 overflow-y-auto text-xs z-20 animate-in fade-in slide-in-from-right-4 duration-200">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
                     style={{
-                      filter: `drop-shadow(0 4px 10px ${palette.glow})`,
+                      backgroundColor:
+                        (KIND_PALETTE[activeNode.kind] || DEFAULT_PALETTE).fill,
                     }}
                   />
-
-                  {/* Node short name or initials inside the circle */}
-                  <text
-                    textAnchor="middle"
-                    y="3.5"
-                    fill={palette.text}
-                    fontSize="9.5"
-                    fontWeight="800"
-                    fontFamily="sans-serif"
-                    className="select-none pointer-events-none"
-                  >
-                    {node.name.length <= 4
-                      ? node.name
-                      : node.id.slice(0, 4)}
-                  </text>
-
-                  {/* Label badge pill below node */}
-                  <g transform={`translate(0, ${NODE_RADIUS + 13})`}>
-                    <rect
-                      x={-(labelText.length * 3.4 + 9)}
-                      y="-8"
-                      width={labelText.length * 6.8 + 18}
-                      height="17"
-                      rx="8.5"
-                      fill="#ffffff"
-                      stroke={isSelected ? palette.fill : "#cbd5e1"}
-                      strokeWidth={isSelected ? "1.5" : "1"}
-                      className="shadow-xs"
-                    />
-                    <text
-                      textAnchor="middle"
-                      y="4"
-                      fill="#0f172a"
-                      fontSize="9"
-                      fontWeight="700"
-                      className="select-none pointer-events-none"
-                    >
-                      {labelText}
-                    </text>
-                  </g>
-
-                  {/* Node Kind Tag on top */}
-                  <text
-                    textAnchor="middle"
-                    y={-(NODE_RADIUS + 6)}
-                    fill="#64748b"
-                    fontSize="8"
-                    fontWeight="800"
-                    className="select-none pointer-events-none uppercase tracking-wider"
-                  >
-                    :{node.kind}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-        </svg>
-
-        {/* Floating Detail Drawer (Node Properties) */}
-        {activeNode && (
-          <div className="absolute right-3 top-3 w-72 max-h-[90%] rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-md shadow-2xl p-4 overflow-y-auto text-xs z-20 animate-in fade-in slide-in-from-right-4 duration-200">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-              <div className="flex items-center gap-1.5 truncate">
-                <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{
-                    backgroundColor:
-                      (KIND_PALETTE[activeNode.kind] || DEFAULT_PALETTE).fill,
-                  }}
-                />
-                <span className="font-extrabold text-sm text-[#0a2852] truncate">
-                  {activeNode.name}
-                </span>
-              </div>
-              <button
-                onClick={() => setActiveNode(null)}
-                className="text-slate-400 hover:text-slate-700 p-1 rounded-md"
-                aria-label="Close details"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="mt-3 space-y-2.5">
-              <div>
-                <span className="text-[10px] uppercase font-bold text-slate-400">
-                  Node Identifier
-                </span>
-                <p className="font-mono text-slate-900 font-semibold break-all bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                  {activeNode.id}
-                </p>
+                  <span className="font-extrabold text-sm text-[#0a2852] truncate">
+                    {activeNode.name}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setActiveNode(null)}
+                  className="text-slate-400 hover:text-slate-700 p-1 rounded-md"
+                  aria-label="Close details"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              <div>
-                <span className="text-[10px] uppercase font-bold text-slate-400">
-                  Entity Label
-                </span>
-                <p className="inline-block mt-0.5 px-2.5 py-0.5 rounded-full font-bold text-xs bg-blue-50 text-blue-700 border border-blue-200">
-                  :{activeNode.kind}
-                </p>
-              </div>
-
-              {activeNode.status && (
+              <div className="mt-3 space-y-2.5">
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400">
-                    Status
+                    Node Identifier
                   </span>
-                  <p className="font-semibold text-slate-800 capitalize">
-                    {activeNode.status}
+                  <p className="font-mono text-slate-900 font-semibold break-all bg-slate-50 p-1.5 rounded-lg border border-slate-200">
+                    {activeNode.id}
                   </p>
                 </div>
-              )}
 
-              {Object.keys(activeNode.properties).length > 0 && (
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
-                    Graph Properties
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400">
+                    Entity Label
                   </span>
-                  <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200 space-y-1 font-mono text-[11px]">
-                    {Object.entries(activeNode.properties).map(([k, v]) => (
-                      <div key={k} className="flex justify-between gap-2">
-                        <span className="text-slate-500 truncate">{k}:</span>
-                        <span className="text-slate-900 font-semibold truncate text-right">
-                          {String(v)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  <p className="inline-block mt-0.5 px-2.5 py-0.5 rounded-full font-bold text-xs bg-blue-50 text-blue-700 border border-blue-200">
+                    :{activeNode.kind}
+                  </p>
                 </div>
-              )}
+
+                {activeNode.status && (
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-400">
+                      Status
+                    </span>
+                    <p className="font-semibold text-slate-800 capitalize">
+                      {activeNode.status}
+                    </p>
+                  </div>
+                )}
+
+                {Object.keys(activeNode.properties).length > 0 && (
+                  <div className="pt-2 border-t border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                      Graph Properties
+                    </span>
+                    <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200 space-y-1 font-mono text-[11px]">
+                      {Object.entries(activeNode.properties).map(([k, v]) => (
+                        <div key={k} className="flex justify-between gap-2">
+                          <span className="text-slate-500 truncate">{k}:</span>
+                          <span className="text-slate-900 font-semibold truncate text-right">
+                            {String(v)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Empty state overlay if zero entities */}
-        {nodes.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-slate-50/80 backdrop-blur-xs">
-            <Layers className="w-10 h-10 text-slate-300 mb-3" />
-            <h4 className="font-bold text-sm text-[#0a2852]">
-              No Graph Nodes Selected
-            </h4>
-            <p className="text-xs text-slate-500 max-w-sm mt-1">
-              Select a graph from the dropdown or submit an investigation query to visualize entity clusters and relationship edges.
-            </p>
-          </div>
-        )}
+          {/* Empty state overlay if zero entities */}
+          {nodes.length === 0 && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-slate-50/80 backdrop-blur-xs">
+              <Layers className="w-10 h-10 text-slate-300 mb-3" />
+              <h4 className="font-bold text-sm text-[#0a2852]">
+                No Graph Nodes Selected
+              </h4>
+              <p className="text-xs text-slate-500 max-w-sm mt-1">
+                Select a graph from the dropdown or submit an investigation query to visualize entity clusters and relationship edges.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
-
-      {/* Bottom hint helper */}
-      <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/70 text-[11px] text-slate-500 flex items-center justify-between">
-        <span>Click & drag bubbles to untangle • Click to inspect properties</span>
-        <span className="font-semibold text-blue-600">FalkorDB Force Physics</span>
-      </div>
-    </div>
+    </>
   );
 }

@@ -17,8 +17,6 @@ export const metadata: Metadata = {
   description: "Investigate relationships, uncover hidden connections, and explain every finding with grounded evidence across any FalkorDB knowledge graph.",
 };
 
-import { CustomCursor } from "../components/CustomCursor";
-
 export default function RootLayout({
   children,
 }: {
@@ -30,7 +28,6 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <CustomCursor />
         {children}
       </body>
     </html>
