@@ -33,7 +33,7 @@ def simulate_candidate_action(
     impact_result = analyze_graph_impact(target_id, direction="both", max_depth=3, graph_name=graph_name)
 
     target_rows = execute_ro_query(
-        "MATCH (n:Entity {id: $id}) RETURN n.id, n.name, n.kind, n.status, properties(n)",
+        "MATCH (n {id: $id}) RETURN n.id, coalesce(n.name, n.id), coalesce(n.kind, head(labels(n)), 'Entity'), coalesce(n.status, 'active'), properties(n)",
         params={"id": target_id},
         graph_name=graph_name,
     )

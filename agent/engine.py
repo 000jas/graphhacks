@@ -34,23 +34,32 @@ You explore connected data in FalkorDB through read-only MCP tools to answer que
    - Never assume, invent, or extrapolate entities, relationships, or labels.
    - If a requested entity does not exist or has no connections in the graph, state that fact clearly and objectively.
 
-2. Schema-Driven Exploration:
-   - Use the runtime graph schema provided in the context to guide your tool selection and queries.
-   - Do not assume specific labels (e.g. Release, Task, Account, Component) or properties (e.g. name, id) unless they exist in the discovered schema.
-   - Always respect the specific scope of the user's objective. Do not drift into unrelated entities or default to software release / root cause narratives unless the objective asks for that.
+2. Universal Schema-Driven Exploration (Zero-Drift):
+   - Rely strictly on the runtime graph schema provided in the context (labels, relationship types, properties).
+   - Adapt to whatever domain is active (Financial/Fraud, Cloud Security, Codebase, Cross-Domain Incident, Infrastructure).
+   - Do NOT default or drift to software release, pull request, or review narratives unless the user's objective explicitly asks for them.
+   - For multi-domain graphs: look for bridge identifiers (e.g., IP addresses, service names, package names) that connect disparate systems or records.
 
-3. Investigation Strategy:
-   - Identify focal entities using `search_connected_entities`, `search_entities_advanced`, or `get_entity_profile`.
-   - Inspect local connectivity and relationship types using `inspect_entity_neighbors` or `get_entity_profile`.
-   - Trace multi-hop connections with `traverse_relationships` or `find_shortest_evidence_path` when path evidence is needed.
-   - Use specialized graph algorithms (e.g. impact analysis, community detection, PageRank) only when the objective calls for topological or structural analysis.
-   - Stop as soon as the user's question is answered or a genuine graph limitation is reached.
+3. Efficient Multi-Hop Investigation Protocol:
+   - Identify focal/starting entities using `search_connected_entities` or `search_entities_advanced`.
+   - For multi-hop or cross-domain questions (e.g. tracing an account/IP to connected security alerts, hosts, services, and repositories):
+     * ALWAYS prefer `traverse_relationships(entity_id=..., depth=3..4)` to discover multi-hop paths across domains in a single step, OR traverse into discovered neighbors.
+     * When inspecting neighbors, recognize incoming relationships: if an entity has incoming `OBSERVED_SOURCE_IP` from a Security Alert (e.g. `ALERT-001`), follow that alert (`ALERT-001` -> `HOST-web-01` -> `SVC-payments-api` -> `repo-payment-api`).
+     * Trace connections across domains (Fraud -> Security -> Operations/Code) rather than checking only the starting node.
+   - Stop as soon as the evidence path answers the objective. Conclude immediately with your findings rather than consuming further iterations.
 
-4. Output Delivery:
+4. Federated Multi-Graph Exploration (Unmerged Graphs):
+   - In enterprise federated setups, data lives across multiple independent tenant or domain graphs.
+   - Use `list_database_graphs()` to discover all available graphs in the database at runtime.
+   - When answering cross-domain questions across unmerged graphs:
+     * Use `cross_link(identifier_type="...", value="...")` to automatically query across domain graphs on bridge keys (IP addresses, service names, package/dependency names).
+     * Or pass `tenant_graph="<graph_name>"` directly to any tool (`search_connected_entities`, `inspect_entity_neighbors`, `traverse_relationships`, `run_read_only_cypher_query`) to investigate a specific domain graph.
+   - Synthesize the cross-domain findings across all domain graphs into a coherent end-to-end explanation without requiring data to be merged.
+
+5. Output Delivery:
    - Deliver clear, direct answers tailored to the objective.
-   - Summarize the verified facts and evidence retrieved.
+   - Outline the verified chain of evidence step-by-step with entity IDs, types, and relationship names.
    - Highlight any genuine data gaps, limitations, or unverified claims.
-   - When appropriate, suggest relevant, concrete next investigative steps based on discovered graph concepts.
 """
 
 
@@ -137,11 +146,18 @@ class GraphOSInvestigator:
                 self.mcp_client,
                 tenant_graph=self.settings.graph_name,
             )
+            is_all_graphs = self.settings.graph_name.strip().upper() in ("ALL_GRAPHS", "ALL")
+            event_label = (
+                f"Active Target: 'ALL_GRAPHS' | Federated Engine across ALL database graphs "
+                f"({graph_profile.total_nodes} nodes, {graph_profile.total_edges} edges, {len(graph_profile.node_kinds)} kinds)"
+                if is_all_graphs
+                else f"Active Graph: '{graph_profile.graph_identity}' | Domain: {graph_profile.inferred_domain} "
+                     f"({graph_profile.total_nodes} nodes, {graph_profile.total_edges} edges, {len(graph_profile.node_kinds)} kinds)"
+            )
             _emit(
                 "schema_discovered",
                 0,
-                f"Active Graph: '{graph_profile.graph_identity}' | Domain: {graph_profile.inferred_domain} "
-                f"({graph_profile.total_nodes} nodes, {graph_profile.total_edges} edges, {len(graph_profile.node_kinds)} kinds)",
+                event_label,
                 graph_profile.to_summary_dict(),
             )
 
@@ -149,6 +165,44 @@ class GraphOSInvestigator:
                 ChatMessage(role="system", content=INVESTIGATOR_SYSTEM_PROMPT),
                 ChatMessage(role="system", content=graph_profile.to_prompt_context()),
             ]
+
+            try:
+                from mcp_server.db import list_available_graphs
+                avail_graphs = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL")]
+                if is_all_graphs:
+                    federated_prompt = (
+                        "### 🌐 FEDERATED ALL-GRAPHS OPERATING MODE:\n"
+                        f"You have simultaneous real-time access to ALL {len(avail_graphs)} domain graphs in FalkorDB Cloud:\n"
+                        "- `fraud_swiftpay` (690 nodes, 1476 edges): Financial accounts, persons, transactions, addresses, devices, IPs\n"
+                        "- `graphos_dev` (97 nodes, 113 edges): Code AST, git repositories, pull requests, services, tasks, releases\n"
+                        "- `security_swiftpay` (51 nodes, 75 edges): Cloud security, hosts, CVE vulnerabilities, IAM roles, zones, alerts\n"
+                        "- `fraud_Front` (115 nodes, 167 edges): Web frontend customer activity, logins, banking accounts\n"
+                        "- `swiftpay_unified` (983 nodes, 2054 edges): Unified cross-domain benchmark data\n\n"
+                        "MULTI-GRAPH INVESTIGATION MANDATES:\n"
+                        "1. You MUST answer the user's question using data from ALL relevant graphs present, NOT just `swiftpay_unified`.\n"
+                        "2. In your final report, ALWAYS explicitly identify and cite which graph each piece of evidence came from (e.g., 'From `fraud_swiftpay`: ...', 'From `graphos_dev`: ...', 'From `security_swiftpay`: ...').\n"
+                        "3. Tools like `search_connected_entities`, `get_entity_profile`, `inspect_entity_neighbors`, and `traverse_relationships` automatically search across ALL active graphs when `tenant_graph='ALL_GRAPHS'`.\n"
+                        "4. If a question asks about code, repositories, or services, inspect `graphos_dev`. If it asks about transactions, accounts, or fraud, inspect `fraud_swiftpay` or `fraud_Front`. If it asks about cloud infrastructure, CVEs, or security, inspect `security_swiftpay`.\n"
+                        "5. For cross-domain investigations, correlate across all corresponding domain graphs to produce an authoritative, multi-graph answer."
+                    )
+                    messages.append(ChatMessage(role="system", content=federated_prompt))
+                elif len(avail_graphs) > 1:
+                    other_graphs = [g for g in avail_graphs if g != graph_profile.graph_identity]
+                    multi_landscape = (
+                        f"### Connected Multi-Domain Landscape:\n"
+                        f"The database instance hosts {len(avail_graphs)} domain graphs:\n"
+                        f"- Primary Active Graph: `{graph_profile.graph_identity}`\n"
+                        f"- Other Available Domain Graphs: {', '.join(f'`{g}`' for g in other_graphs)}\n\n"
+                        "MULTI-GRAPH INSTRUCTIONS:\n"
+                        "If an investigation touches multiple domains (e.g. Accounts/Fraud, Security Alerts/CVEs, Codebase Repositories):\n"
+                        "1. You are NOT restricted to only the primary active graph.\n"
+                        "2. Use `cross_link(value='...')` to automatically query across domain graphs on bridge identifiers (IPs, service names, packages).\n"
+                        "3. Or pass `tenant_graph='<graph_name>'` to any read-only MCP tool to inspect entities in other domain graphs."
+                    )
+                    messages.append(ChatMessage(role="system", content=multi_landscape))
+            except Exception:
+                pass
+
 
             if conversation_context:
                 messages.append(
@@ -259,8 +313,13 @@ class GraphOSInvestigator:
                     if "<|" in fn_name:
                         import re
                         fn_name = re.sub(r"<\|.*?\|>.*", "", fn_name).strip()
-                        tc.function_name = fn_name
-                    args = tc.arguments or {}
+                    args = dict(tc.arguments or {})
+                    if fn_name not in ("cross_link", "list_database_graphs"):
+                        if not args.get("tenant_graph") and self.settings.graph_name:
+                            args["tenant_graph"] = self.settings.graph_name
+
+                    tc.arguments = args
+
 
                     call_sig = f"{fn_name}:{json.dumps(args, sort_keys=True)}"
                     if call_sig == last_call_signature:

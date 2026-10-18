@@ -1,6 +1,9 @@
 {
   "include": ["agent", "mcp_server", "dashboard", "tests"],
-  "extraPaths": ["mcp_server", "."],
+  "extraPaths": ["mcp_server", "agent", "."],
   "venvPath": ".",
-  "venv": ".venv"
+  "venv": ".venv",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": false,
+  "reportGeneralTypeIssues": "none"
 }

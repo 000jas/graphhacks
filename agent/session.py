@@ -272,6 +272,10 @@ class SessionManager:
                 continue
         return results
 
+    def list_recent_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
+        """List most recent sessions up to limit."""
+        return self.list_sessions()[:limit]
+
     def clear(self) -> None:
         """Clear the current session's conversation turns."""
         self.state.turns.clear()

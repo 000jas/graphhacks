@@ -43,7 +43,11 @@ READ_ONLY_ALLOWED_TOOLS = {
     "evaluate_candidate_actions",
     "query_decision_memory",
     "run_read_only_cypher_query",
+    "cross_link",
+    "list_database_graphs",
 }
+
+
 
 MUTATING_TOOLS_BLOCKLIST = {
     "propose_action",

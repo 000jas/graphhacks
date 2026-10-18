@@ -25,7 +25,9 @@ export interface EvidencePath {
   target_id: string;
   hop_count: number;
   chain_names: string[];
+  chain_ids?: string[];
   relationships: string[];
+  edges?: RelationshipEdge[];
   is_verified: boolean;
 }
 
@@ -38,6 +40,7 @@ export interface EvidenceSummary {
   duplicate_records_detected: number;
   provenance_verification_rate: number;
   entities: Record<string, EntityFact>;
+  edges?: RelationshipEdge[];
   key_paths: EvidencePath[];
   unresolved_gaps: string[];
 }

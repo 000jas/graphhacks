@@ -27,6 +27,10 @@ SLASH_COMMANDS = [
     "/config",
     "/tools",
     "/model",
+    "/graph",
+    "/graphs",
+    "/schema",
+    "/refresh",
     "/history",
     "/new",
     "/reset",
@@ -128,13 +132,43 @@ class InteractiveREPL:
         elif cmd == "/help":
             self.ui.render_help()
 
-        elif cmd in ("/schema", "/graph"):
+        elif cmd == "/schema":
             self.ui.console.print("  [dim]Discovering connected runtime graph schema via MCP...[/dim]")
             try:
                 profile = await self.investigator.get_runtime_schema(force_refresh=False)
                 self.ui.render_schema(profile)
             except Exception as exc:
                 self.ui.console.print(f"[bold red]Failed to inspect schema:[/bold red] {exc}")
+
+        elif cmd == "/graph":
+            if not args:
+                self.ui.console.print(
+                    f"  [bold white]Active Graph Target:[/bold white] [cyan]{self.settings.graph_name}[/cyan]\n"
+                    "  [dim]Usage: /graph <graph_name>[/dim]\n"
+                    "  [dim]Example: /graph swiftpay_unified[/dim]\n"
+                    "  [dim]Use /graphs to list all available database graphs[/dim]\n"
+                )
+            else:
+                new_graph = args[0].strip()
+                self.settings.graph_name = new_graph
+                self.investigator.schema_manager.invalidate()
+                self.ui.console.print(
+                    f"  [bold green]✓ Switched active graph to '{new_graph}'[/bold green] (Schema cache invalidated)\n"
+                )
+
+        elif cmd == "/graphs":
+            self.ui.console.print("  [dim]Querying available graphs in FalkorDB Cloud...[/dim]")
+            try:
+                from mcp_server.db import get_db_client
+                client = get_db_client()
+                avail_graphs = client.list_graphs()
+                self.ui.console.print(f"  [bold white]Available FalkorDB Graphs ({len(avail_graphs)}):[/bold white]")
+                for g in avail_graphs:
+                    is_active = " [bold green](active)[/bold green]" if g == self.settings.graph_name else ""
+                    self.ui.console.print(f"    • [cyan]{g}[/cyan]{is_active}")
+                self.ui.console.print("  [dim]Switch active graph with: /graph <name>[/dim]\n")
+            except Exception as exc:
+                self.ui.console.print(f"[bold red]Failed to list graphs:[/bold red] {exc}")
 
         elif cmd == "/refresh":
             self.ui.console.print("  [dim]Forcing dynamic re-discovery of graph schema from FalkorDB...[/dim]")

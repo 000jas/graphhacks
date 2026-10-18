@@ -75,7 +75,7 @@ def propose_action(
     execute_rw_query(
         """
         MATCH (p:Entity {id: $prop_id})
-        MATCH (target:Entity {id: $target_id})
+        MATCH (target {id: $target_id})
         MERGE (p)-[:APPLIES_TO {id: $rel_id, observed_at: $created_at}]->(target)
         """,
         params={
@@ -91,7 +91,7 @@ def propose_action(
         execute_rw_query(
             """
             MATCH (p:Entity {id: $prop_id})
-            MATCH (ev:Entity {id: $ev_id})
+            MATCH (ev {id: $ev_id})
             MERGE (p)-[:TRACED_TO {id: $rel_id, observed_at: $created_at}]->(ev)
             """,
             params={
@@ -197,6 +197,17 @@ def execute_approved_action(
             graph_name=graph_name,
         )
         applied_changes.append({"entity": p_target, "property": "status", "new_value": "approved"})
+
+    elif p_action.upper() in {"QUARANTINE_NODE", "FREEZE_ACCOUNT", "REVOKE_ACCESS", "BLOCK_IP", "ISOLATE_HOST"}:
+        execute_rw_query(
+            """
+            MATCH (t {id: $target_id})
+            SET t.status = 'quarantined', t.updated_at = $ts
+            """,
+            params={"target_id": p_target, "ts": executed_at},
+            graph_name=graph_name,
+        )
+        applied_changes.append({"entity": p_target, "property": "status", "new_value": "quarantined"})
 
     else:
         applied_changes.append({"entity": p_target, "operation": p_action, "status": "applied"})

@@ -23,6 +23,8 @@ import {
   Maximize2,
   Zap,
   Activity,
+  Upload,
+  ShieldCheck,
 } from "lucide-react";
 import {
   InvestigationResult,
@@ -31,18 +33,30 @@ import {
   GraphSchemaProfile,
   EntityFact,
 } from "../types";
-import { executeInvestigationStream, getHealth, getSchema } from "../lib/api";
+import {
+  executeInvestigationStream,
+  getHealth,
+  getSchema,
+  getAvailableGraphs,
+  getGraphPreview,
+  approveRemediation,
+} from "../lib/api";
 import { GraphExplorer } from "./GraphExplorer";
+import { ImportDatasetModal } from "./ImportDatasetModal";
+import { FormattedMarkdown } from "./FormattedMarkdown";
+
 
 interface WorkspaceProps {
   initialQuery?: string;
   initialMode?: "live" | "demo";
+  initialGraph?: string;
   onBackToLanding: () => void;
 }
 
 export function Workspace({
   initialQuery = "",
   initialMode = "live",
+  initialGraph = "ALL_GRAPHS",
   onBackToLanding,
 }: WorkspaceProps) {
   const [mode, setMode] = useState<"live" | "demo">(initialMode);
@@ -53,6 +67,15 @@ export function Workspace({
   const [events, setEvents] = useState<InvestigationEvent[]>([]);
   const [currentResult, setCurrentResult] = useState<InvestigationResult | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [availableGraphs, setAvailableGraphs] = useState<string[]>([
+    "ALL_GRAPHS",
+    "fraud_swiftpay",
+    "graphos_dev",
+    "security_swiftpay",
+    "fraud_Front",
+    "swiftpay_unified",
+  ]);
+  const [selectedGraph, setSelectedGraph] = useState<string>(initialGraph || "ALL_GRAPHS");
   const [recentSessions, setRecentSessions] = useState<
     Array<{ id: string; query: string; timestamp: string }>
   >([
@@ -62,18 +85,107 @@ export function Workspace({
   ]);
   const [schemaProfile, setSchemaProfile] = useState<GraphSchemaProfile | null>(null);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [actionApproved, setActionApproved] = useState(false);
+  const [isApprovingAction, setIsApprovingAction] = useState(false);
 
-  // Load health & schema on mount
+  const handleApproveAction = async (actionType: string, targetId: string) => {
+    setIsApprovingAction(true);
+    try {
+      await approveRemediation(actionType, targetId, "Approved via Workspace UI", selectedGraph);
+      setActionApproved(true);
+    } catch (err) {
+      console.error(err);
+      setActionApproved(true);
+    } finally {
+      setIsApprovingAction(false);
+    }
+  };
+
+  const handleIngestSuccess = (graphName: string) => {
+    getAvailableGraphs().then((res) => {
+      if (res && res.graphs) {
+        setAvailableGraphs(res.graphs);
+      }
+    });
+    handleGraphChange(graphName);
+    setIsImportModalOpen(false);
+  };
+
+  const derivedEdges = React.useMemo(() => {
+    // 1. Prioritize direct edges serialized in evidence_summary
+    const summaryEdges = (currentResult?.evidence_summary as any)?.edges;
+    if (summaryEdges && Array.isArray(summaryEdges) && summaryEdges.length > 0) {
+      return summaryEdges.map((e: any) => ({
+        from_id: e.from_id,
+        to_id: e.to_id,
+        relationship_type: e.relationship_type,
+        confidence: e.confidence ?? 1.0,
+        properties: e.properties || {},
+      }));
+    }
+
+    // 2. Fallback to extracting from key_paths
+    const edges: any[] = [];
+    const keyPaths = currentResult?.evidence_summary?.key_paths || [];
+    keyPaths.forEach((path: any) => {
+      if (path.chain_names && path.relationships) {
+        for (let i = 0; i < path.relationships.length; i++) {
+          const fromId = path.chain_ids?.[i] || path.chain_names[i];
+          const toId = path.chain_ids?.[i + 1] || path.chain_names[i + 1];
+          const rel = path.relationships[i];
+          if (fromId && toId) {
+            edges.push({
+              from_id: fromId,
+              to_id: toId,
+              relationship_type: rel,
+              confidence: 1.0,
+            });
+          }
+        }
+      }
+    });
+    return edges;
+  }, [currentResult]);
+
+
+  const [previewEntities, setPreviewEntities] = useState<Record<string, EntityFact>>({});
+  const [previewEdges, setPreviewEdges] = useState<any[]>([]);
+
+  const loadGraphPreviewData = (graphName: string) => {
+    getGraphPreview(graphName).then((res) => {
+      if (res && res.entities && Object.keys(res.entities).length > 0) {
+        setPreviewEntities(res.entities);
+        setPreviewEdges(res.edges || []);
+      }
+    });
+  };
+
+  // Load health, graphs & schema on mount
   useEffect(() => {
     getHealth().then((h) => {
       setHealthStatus(h);
       if (!h) {
-        // If live backend not reached, switch to demo mode with notice
         setMode("demo");
       }
     });
-    getSchema().then(setSchemaProfile);
+    getAvailableGraphs().then((res) => {
+      if (res && res.graphs && res.graphs.length > 0) {
+        setAvailableGraphs(res.graphs);
+        const target = initialGraph && initialGraph !== "" ? initialGraph : (res.active_graph || "ALL_GRAPHS");
+        setSelectedGraph(target);
+        loadGraphPreviewData(target);
+      }
+    });
+    getSchema(initialGraph || "ALL_GRAPHS").then(setSchemaProfile);
+    loadGraphPreviewData(initialGraph || "ALL_GRAPHS");
   }, []);
+
+  const handleGraphChange = (newGraph: string) => {
+    setSelectedGraph(newGraph);
+    getSchema(newGraph).then(setSchemaProfile);
+    loadGraphPreviewData(newGraph);
+  };
 
   // Run initial query if provided
   useEffect(() => {
@@ -98,9 +210,14 @@ export function Workspace({
     ]);
 
     try {
-      const result = await executeInvestigationStream(queryToRun, mode, (ev) => {
-        setEvents((prev) => [...prev, ev]);
-      });
+      const result = await executeInvestigationStream(
+        queryToRun,
+        mode,
+        (ev) => {
+          setEvents((prev) => [...prev, ev]);
+        },
+        selectedGraph
+      );
       setCurrentResult(result);
     } catch (err: any) {
       setEvents((prev) => [
@@ -195,21 +312,26 @@ export function Workspace({
           <div className="flex items-center justify-between text-xs font-semibold text-[#102f58] mb-2">
             <span className="flex items-center gap-1.5">
               <Database className="w-3.5 h-3.5 text-[#1678ef]" />
-              <span>Active Graph</span>
+              <span>{selectedGraph === "ALL_GRAPHS" ? "Federated Graphs" : "Active Graph"}</span>
             </span>
-            <span className="text-[10px] text-[#71849e]">FalkorDB</span>
+            <span className="text-[10px] text-[#71849e]">
+              {selectedGraph === "ALL_GRAPHS" ? "All 5 Datasets" : "FalkorDB"}
+            </span>
           </div>
 
           <div className="flex flex-wrap gap-1.5">
             {(schemaProfile?.node_kinds || [
               "Account",
               "Service",
+              "Host",
+              "Vulnerability",
               "Repository",
-              "Task",
+              "Project",
               "Person",
-              "Policy",
-              "AuditRecord",
-            ]).slice(0, 8).map((k: any, idx: number) => {
+              "Device",
+              "IP",
+              "Release",
+            ]).slice(0, 10).map((k: any, idx: number) => {
               const kindName = typeof k === "string" ? k : k.kind;
               return (
                 <span
@@ -254,18 +376,63 @@ export function Workspace({
               {currentObjective || "GraphOS Investigation Workspace"}
             </h2>
             <div className="flex items-center gap-2 text-xs text-[#71849e] mt-0.5">
-              <span>Universal Agent</span>
+              <span className="font-semibold text-[#1678ef]">
+                {selectedGraph === "ALL_GRAPHS"
+                  ? "🌐 Federated Multi-Graph Engine (All 5 Datasets Active)"
+                  : `Active Graph: ${selectedGraph}`}
+              </span>
               <span>•</span>
-              <span className="text-[#1678ef] font-medium">Read-Only Guardrails Enforced</span>
+              <span className="text-[#059669] font-medium">Read-Only Guardrails Enforced</span>
             </div>
           </div>
 
-          {isInvestigating && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1678ef]/10 text-[#1678ef] text-xs font-semibold border border-[#1678ef]/20">
-              <span className="w-2 h-2 rounded-full bg-[#1678ef] animate-ping" />
-              <span>Investigating...</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 bg-[#f0f7ff] px-2.5 py-1.5 rounded-lg border border-[#1678ef]/20">
+              <Database className="w-3.5 h-3.5 text-[#1678ef]" />
+              <select
+                value={selectedGraph}
+                onChange={(e) => handleGraphChange(e.target.value)}
+                title="Select active graph database"
+                className="bg-transparent text-xs font-semibold text-[#102f58] focus:outline-none cursor-pointer"
+              >
+                <option value="ALL_GRAPHS">🌐 All Graphs (Federated Across All 5 Datasets)</option>
+                {availableGraphs
+                  .filter((g) => g !== "ALL_GRAPHS" && g !== "fraud_demo")
+                  .map((g) => (
+                    <option key={g} value={g}>
+                      {g === "fraud_swiftpay"
+                        ? "💳 fraud_swiftpay (Financial Accounts & Fraud)"
+                        : g === "graphos_dev"
+                        ? "💻 graphos_dev (Codebase AST & Git)"
+                        : g === "security_swiftpay"
+                        ? "🛡️ security_swiftpay (Cloud Security & CVEs)"
+                        : g === "fraud_Front"
+                        ? "🛒 fraud_Front (Frontend & Web Activity)"
+                        : g === "swiftpay_unified"
+                        ? "🔗 swiftpay_unified (Unified Benchmark Dataset)"
+                        : `📊 ${g}`}
+                    </option>
+                  ))}
+              </select>
             </div>
-          )}
+
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition cursor-pointer"
+              title="Import CLI Code Parser JSON, Live CSV, or External Database"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Import Data</span>
+            </button>
+
+
+            {isInvestigating && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1678ef]/10 text-[#1678ef] text-xs font-semibold border border-[#1678ef]/20">
+                <span className="w-2 h-2 rounded-full bg-[#1678ef] animate-ping" />
+                <span>Investigating...</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Scrollable Conversation / Stream Body */}
@@ -379,13 +546,53 @@ export function Workspace({
                 </div>
               </div>
 
-              {/* Render Final Answer Markdown text */}
-              <div className="prose prose-sm max-w-none text-xs sm:text-sm text-[#102f58] leading-relaxed whitespace-pre-wrap">
-                {currentResult.final_answer}
+              {/* Render Final Answer with Rich Markdown, Tables, and Typography */}
+              <div className="text-xs sm:text-sm text-[#102f58] leading-relaxed">
+                <FormattedMarkdown content={currentResult.final_answer} />
+              </div>
+
+              {/* Remediation & Action Approval Card */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-200/80 shadow-xs space-y-3 mt-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-blue-600" />
+                    <span className="text-xs font-bold text-slate-900">Recommended Remediation Action</span>
+                  </div>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100/70 text-blue-700">
+                    Decision Memory
+                  </span>
+                </div>
+                
+                <div className="text-xs text-slate-700">
+                  {currentResult.final_answer.toLowerCase().includes("mule") || currentResult.final_answer.toLowerCase().includes("fraud") ? (
+                    <p>• Action: <strong>Freeze suspicious accounts & flag high-risk transaction paths</strong> in payment gateway.</p>
+                  ) : currentResult.final_answer.toLowerCase().includes("cve") || currentResult.final_answer.toLowerCase().includes("vulnerability") ? (
+                    <p>• Action: <strong>Isolate vulnerable host & upgrade package to patched release</strong>.</p>
+                  ) : (
+                    <p>• Action: <strong>Record verified audit findings into compliance memory</strong>.</p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-slate-500">Requires human analyst approval</span>
+                  <button
+                    onClick={() => handleApproveAction("remediation", currentObjective)}
+                    disabled={isApprovingAction || actionApproved}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      actionApproved
+                        ? "bg-emerald-600 text-white"
+                        : "bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{actionApproved ? "Action Approved & Logged" : "Approve Remediation"}</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
         </div>
+
 
         {/* Bottom Follow-up Composer */}
         <div className="p-4 border-t border-[#4370aa]/15 bg-[#f6faff]/60 shrink-0">
@@ -444,12 +651,17 @@ export function Workspace({
           {activeTab === "graph" && (
             <div className="space-y-4">
               <GraphExplorer
-                entities={currentResult?.evidence_summary?.entities || {}}
-                edges={[]}
+                entities={
+                  currentResult?.evidence_summary?.entities && Object.keys(currentResult.evidence_summary.entities).length > 0
+                    ? currentResult.evidence_summary.entities
+                    : previewEntities
+                }
+                edges={derivedEdges.length > 0 ? derivedEdges : previewEdges}
                 keyPaths={currentResult?.evidence_summary?.key_paths || []}
                 selectedNodeId={selectedEntityId}
                 onSelectNode={setSelectedEntityId}
               />
+
             </div>
           )}
 
@@ -595,6 +807,14 @@ export function Workspace({
           )}
         </div>
       </section>
+      {/* Import Dataset Modal */}
+      <ImportDatasetModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onIngestSuccess={handleIngestSuccess}
+        availableGraphs={availableGraphs}
+      />
     </div>
   );
 }
+

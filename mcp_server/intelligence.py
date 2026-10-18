@@ -27,7 +27,12 @@ def discover_relationship_patterns(
     depth = max(1, min(max_depth, 4))
 
     entity_rows = execute_ro_query(
-        "MATCH (n:Entity {id: $id}) RETURN n.id, n.name, n.kind",
+        """
+        MATCH (n)
+        WHERE (n.id = $id OR toString(id(n)) = $id OR n.code = $id OR n.name = $id)
+        RETURN coalesce(n.id, n.code, toString(id(n))), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node')
+        LIMIT 1
+        """,
         params={"id": entity_id},
         graph_name=target_graph,
     )
@@ -42,15 +47,16 @@ def discover_relationship_patterns(
     e_id, e_name, e_kind = entity_rows[0]
 
     query = f"""
-    MATCH p = (start:Entity {{id: $entity_id}})-[*1..{depth}]-(target:Entity)
-    WHERE target.id <> start.id
+    MATCH p = (start)-[*1..{depth}]-(target)
+    WHERE (start.id = $entity_id OR toString(id(start)) = $entity_id OR start.code = $entity_id OR start.name = $entity_id)
+      AND target <> start
     RETURN
         length(p) AS hop_length,
-        [n IN nodes(p) | n.kind] AS kind_pattern,
+        [n IN nodes(p) | coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node')] AS kind_pattern,
         [r IN relationships(p) | type(r)] AS rel_pattern,
-        target.id AS target_id,
-        target.name AS target_name,
-        target.kind AS target_kind
+        coalesce(target.id, target.code, toString(id(target))) AS target_id,
+        coalesce(target.name, target.id, toString(id(target))) AS target_name,
+        coalesce(target.kind, head([lbl IN labels(target) WHERE lbl <> 'Entity']), head(labels(target)), 'Node') AS target_kind
     LIMIT 250
     """
     rows = execute_ro_query(query, params={"entity_id": entity_id}, graph_name=target_graph)
@@ -88,9 +94,12 @@ def discover_relationship_patterns(
             })
 
     triangles_query = """
-    MATCH (a:Entity {id: $entity_id})-[r1]-(b:Entity)-[r2]-(c:Entity)-[r3]-(a)
-    WHERE b.id <> c.id AND b.id <> a.id AND c.id <> a.id
-    RETURN DISTINCT b.id, b.name, b.kind, c.id, c.name, c.kind, type(r1), type(r2), type(r3)
+    MATCH (a)-[r1]-(b)-[r2]-(c)-[r3]-(a)
+    WHERE (a.id = $entity_id OR toString(id(a)) = $entity_id OR a.code = $entity_id OR a.name = $entity_id)
+      AND b <> c AND b <> a AND c <> a
+    RETURN DISTINCT coalesce(b.id, toString(id(b))), coalesce(b.name, b.id), coalesce(b.kind, head([lbl IN labels(b) WHERE lbl <> 'Entity']), head(labels(b)), 'Node'),
+                    coalesce(c.id, toString(id(c))), coalesce(c.name, c.id), coalesce(c.kind, head([lbl IN labels(c) WHERE lbl <> 'Entity']), head(labels(c)), 'Node'),
+                    type(r1), type(r2), type(r3)
     LIMIT 20
     """
     tri_rows = execute_ro_query(triangles_query, params={"entity_id": entity_id}, graph_name=target_graph)
@@ -145,9 +154,14 @@ def find_common_neighbors(
 
     for eid in clean_ids:
         query = f"""
-        MATCH (start:Entity {{id: $eid}}){dir_pattern}(neighbor:Entity)
-        WHERE neighbor.id <> start.id
-        RETURN neighbor.id, neighbor.name, neighbor.kind, type(r), neighbor.status
+        MATCH (start){dir_pattern}(neighbor)
+        WHERE (start.id = $eid OR toString(id(start)) = $eid OR start.code = $eid OR start.name = $eid)
+          AND neighbor <> start
+        RETURN coalesce(neighbor.id, neighbor.code, toString(id(neighbor))),
+               coalesce(neighbor.name, neighbor.id, toString(id(neighbor))),
+               coalesce(neighbor.kind, head([lbl IN labels(neighbor) WHERE lbl <> 'Entity']), head(labels(neighbor)), 'Node'),
+               type(r),
+               coalesce(neighbor.status, neighbor.state, 'UNKNOWN')
         """
         rows = execute_ro_query(query, params={"eid": eid}, graph_name=target_graph)
         nbr_set = set()
@@ -187,7 +201,7 @@ def find_common_neighbors(
     scored_common = []
     for nid in common_all:
         deg_rows = execute_ro_query(
-            "MATCH (n:Entity {id: $nid})-[r]-() RETURN count(r) AS degree",
+            "MATCH (n)-[r]-() WHERE (n.id = $nid OR toString(id(n)) = $nid OR n.code = $nid) RETURN count(r) AS degree",
             params={"nid": nid},
             graph_name=target_graph,
         )
@@ -253,8 +267,10 @@ def find_alternative_paths(
         params["rels"] = rel_types
 
     query = f"""
-    MATCH p = (source:Entity {{id: $source_id}})-[*1..{depth}]-(target:Entity {{id: $target_id}})
-    WHERE true {rel_filter}
+    MATCH p = (source)-[*1..{depth}]-(target)
+    WHERE (source.id = $source_id OR toString(id(source)) = $source_id OR source.code = $source_id OR source.name = $source_id)
+      AND (target.id = $target_id OR toString(id(target)) = $target_id OR target.code = $target_id OR target.name = $target_id)
+      {rel_filter}
     RETURN p
     ORDER BY length(p)
     LIMIT {max_paths}
@@ -382,15 +398,16 @@ def analyze_reachability(
         params["kinds"] = clean_kinds
 
     query = f"""
-    MATCH p = (start:Entity {{id: $start_id}}){dir_pattern}(reachable:Entity)
-    WHERE reachable.id <> start.id {path_filter}
+    MATCH p = (start){dir_pattern}(reachable)
+    WHERE (start.id = $start_id OR toString(id(start)) = $start_id OR start.code = $start_id OR start.name = $start_id)
+      AND reachable <> start {path_filter}
     RETURN
-        reachable.id,
-        reachable.name,
-        reachable.kind,
-        reachable.status,
+        coalesce(reachable.id, reachable.code, toString(id(reachable))),
+        coalesce(reachable.name, reachable.id, toString(id(reachable))),
+        coalesce(reachable.kind, head([lbl IN labels(reachable) WHERE lbl <> 'Entity']), head(labels(reachable)), 'Node'),
+        coalesce(reachable.status, reachable.state, 'UNKNOWN'),
         min(length(p)) AS min_hops
-    ORDER BY min_hops, reachable.name
+    ORDER BY min_hops, coalesce(reachable.name, reachable.id)
     LIMIT 200
     """
     rows = execute_ro_query(query, params=params, graph_name=target_graph)
@@ -422,7 +439,12 @@ def analyze_reachability(
                 })
             else:
                 t_check = execute_ro_query(
-                    "MATCH (n:Entity {id: $id}) RETURN n.id, n.name, n.kind",
+                    """
+                    MATCH (n)
+                    WHERE (n.id = $id OR toString(id(n)) = $id OR n.code = $id OR n.name = $id)
+                    RETURN coalesce(n.id, n.code, toString(id(n))), coalesce(n.name, n.id), coalesce(n.kind, head(labels(n)), 'Node')
+                    LIMIT 1
+                    """,
                     params={"id": tid},
                     graph_name=target_graph,
                 )
@@ -462,9 +484,9 @@ def detect_graph_anomalies(
 
     isolated_rows = execute_ro_query(
         """
-        MATCH (n:Entity)
+        MATCH (n)
         WHERE NOT (n)-[]-()
-        RETURN n.id, n.name, n.kind, n.status
+        RETURN coalesce(n.id, n.code, toString(id(n))), coalesce(n.name, n.id), coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node'), coalesce(n.status, n.state, 'UNKNOWN')
         LIMIT 20
         """,
         graph_name=target_graph,
@@ -481,9 +503,12 @@ def detect_graph_anomalies(
 
     dup_rows = execute_ro_query(
         """
-        MATCH (a:Entity), (b:Entity)
-        WHERE a.id < b.id AND toLower(trim(a.name)) = toLower(trim(b.name))
-        RETURN a.id, a.name, a.kind, b.id, b.name, b.kind
+        MATCH (a), (b)
+        WHERE (a.id < b.id OR toString(id(a)) < toString(id(b)))
+          AND toLower(trim(coalesce(a.name, a.title, ''))) = toLower(trim(coalesce(b.name, b.title, '')))
+          AND coalesce(a.name, a.title, '') <> ''
+        RETURN coalesce(a.id, a.code, toString(id(a))), coalesce(a.name, a.id), coalesce(a.kind, head([lbl IN labels(a) WHERE lbl <> 'Entity']), head(labels(a)), 'Node'),
+               coalesce(b.id, b.code, toString(id(b))), coalesce(b.name, b.id), coalesce(b.kind, head([lbl IN labels(b) WHERE lbl <> 'Entity']), head(labels(b)), 'Node')
         LIMIT 20
         """,
         graph_name=target_graph,
@@ -503,10 +528,10 @@ def detect_graph_anomalies(
 
     degree_rows = execute_ro_query(
         """
-        MATCH (n:Entity)-[r]-()
+        MATCH (n)-[r]-()
         WITH n, count(r) AS deg
         ORDER BY deg DESC
-        RETURN n.id, n.name, n.kind, deg
+        RETURN coalesce(n.id, n.code, toString(id(n))), coalesce(n.name, n.id), coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node'), deg
         LIMIT 10
         """,
         graph_name=target_graph,
@@ -531,9 +556,9 @@ def detect_graph_anomalies(
 
     unverified_rows = execute_ro_query(
         """
-        MATCH (a:Entity)-[r]->(b:Entity)
+        MATCH (a)-[r]->(b)
         WHERE (r.source_record_id IS NULL OR r.confidence < 0.6)
-        RETURN a.id, type(r), b.id, r.source_record_id, r.confidence
+        RETURN coalesce(a.id, toString(id(a))), type(r), coalesce(b.id, toString(id(b))), r.source_record_id, r.confidence
         LIMIT 20
         """,
         graph_name=target_graph,
@@ -579,32 +604,49 @@ def compare_connectivity(
     target_graph = settings.validate_graph_name(tenant_graph)
 
     nodes_rows = execute_ro_query(
-        "MATCH (n:Entity) WHERE n.id IN [$id_a, $id_b] RETURN n.id, n.name, n.kind",
+        """
+        MATCH (n)
+        WHERE (n.id IN [$id_a, $id_b] OR toString(id(n)) IN [$id_a, $id_b] OR n.code IN [$id_a, $id_b])
+        RETURN coalesce(n.id, n.code, toString(id(n))), coalesce(n.name, n.id), coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node')
+        """,
         params={"id_a": source_a_id, "id_b": source_b_id},
         graph_name=target_graph,
     )
     info_map = {r[0]: {"id": r[0], "name": r[1], "kind": r[2]} for r in nodes_rows}
-    if source_a_id not in info_map or source_b_id not in info_map:
-        raise ValueError(f"One or both entities '{source_a_id}', '{source_b_id}' not found in graph.")
+    if source_a_id not in info_map:
+        info_map[source_a_id] = {"id": source_a_id, "name": source_a_id, "kind": "Entity"}
+    if source_b_id not in info_map:
+        info_map[source_b_id] = {"id": source_b_id, "name": source_b_id, "kind": "Entity"}
 
-    deg_a = execute_ro_query(
-        "MATCH (n:Entity {id: $id})-[r]-() RETURN count(r)",
+    deg_a_rows = execute_ro_query(
+        "MATCH (n)-[r]-() WHERE (n.id = $id OR toString(id(n)) = $id OR n.code = $id) RETURN count(r)",
         params={"id": source_a_id},
         graph_name=target_graph,
-    )[0][0]
-    deg_b = execute_ro_query(
-        "MATCH (n:Entity {id: $id})-[r]-() RETURN count(r)",
+    )
+    deg_a = deg_a_rows[0][0] if deg_a_rows else 0
+
+    deg_b_rows = execute_ro_query(
+        "MATCH (n)-[r]-() WHERE (n.id = $id OR toString(id(n)) = $id OR n.code = $id) RETURN count(r)",
         params={"id": source_b_id},
         graph_name=target_graph,
-    )[0][0]
+    )
+    deg_b = deg_b_rows[0][0] if deg_b_rows else 0
 
     nbrs_a = execute_ro_query(
-        "MATCH (n:Entity {id: $id})-[r]-(m:Entity) RETURN m.id, m.name, m.kind, type(r)",
+        """
+        MATCH (n)-[r]-(m)
+        WHERE (n.id = $id OR toString(id(n)) = $id OR n.code = $id)
+        RETURN coalesce(m.id, m.code, toString(id(m))), coalesce(m.name, m.id), coalesce(m.kind, head([lbl IN labels(m) WHERE lbl <> 'Entity']), head(labels(m)), 'Node'), type(r)
+        """,
         params={"id": source_a_id},
         graph_name=target_graph,
     )
     nbrs_b = execute_ro_query(
-        "MATCH (n:Entity {id: $id})-[r]-(m:Entity) RETURN m.id, m.name, m.kind, type(r)",
+        """
+        MATCH (n)-[r]-(m)
+        WHERE (n.id = $id OR toString(id(n)) = $id OR n.code = $id)
+        RETURN coalesce(m.id, m.code, toString(id(m))), coalesce(m.name, m.id), coalesce(m.kind, head([lbl IN labels(m) WHERE lbl <> 'Entity']), head(labels(m)), 'Node'), type(r)
+        """,
         params={"id": source_b_id},
         graph_name=target_graph,
     )
@@ -620,12 +662,12 @@ def compare_connectivity(
     if target_id:
         tid = validate_identifier(target_id, field_name="target_id")
         dist_a = execute_ro_query(
-            "MATCH p = (a:Entity {id: $aid})-[*1..6]-(t:Entity {id: $tid}) RETURN min(length(p))",
+            "MATCH p = (a)-[*1..6]-(t) WHERE (a.id = $aid OR toString(id(a)) = $aid) AND (t.id = $tid OR toString(id(t)) = $tid) RETURN min(length(p))",
             params={"aid": source_a_id, "tid": tid},
             graph_name=target_graph,
         )
         dist_b = execute_ro_query(
-            "MATCH p = (b:Entity {id: $bid})-[*1..6]-(t:Entity {id: $tid}) RETURN min(length(p))",
+            "MATCH p = (b)-[*1..6]-(t) WHERE (b.id = $bid OR toString(id(b)) = $bid) AND (t.id = $tid OR toString(id(t)) = $tid) RETURN min(length(p))",
             params={"bid": source_b_id, "tid": tid},
             graph_name=target_graph,
         )

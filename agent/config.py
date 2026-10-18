@@ -95,8 +95,13 @@ class AgentSettings:
         default_factory=lambda: os.getenv("MCP_AUTH_TOKEN") or None
     )
     graph_name: str = field(
-        default_factory=lambda: os.getenv("FALKORDB_GRAPH", "graphos_dev").strip()
+        default_factory=lambda: (
+            os.getenv("GRAPHOS_GRAPH_NAME")
+            or os.getenv("FALKORDB_GRAPH")
+            or "ALL_GRAPHS"
+        ).strip()
     )
+
 
     agent_name: str = field(
         default_factory=lambda: os.getenv("AGENT_NAME", "GraphOS Investigator").strip()

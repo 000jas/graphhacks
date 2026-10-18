@@ -68,8 +68,6 @@ def search_entities_advanced(
     {where_stmt}
     RETURN count(DISTINCT n) AS total
     """
-    count_rows = execute_ro_query(count_cypher, params=params, graph_name=target_graph)
-    total_count = count_rows[0][0] if count_rows else 0
 
     page_cypher = f"""
     {match_clause}
@@ -79,6 +77,50 @@ def search_entities_advanced(
     SKIP {offset}
     LIMIT {limit}
     """
+
+    if target_graph in ("ALL_GRAPHS", "ALL"):
+        from mcp_server.db import get_db_client, list_available_graphs
+        client = get_db_client()
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL", "FRAUD_DEMO")]
+        all_entities: list[dict[str, Any]] = []
+        total_count = 0
+        for g in avail:
+            try:
+                g_obj = client.select_graph(g)
+                c_res = g_obj.ro_query(count_cypher, params=params).result_set
+                if c_res and isinstance(c_res[0][0], int):
+                    total_count += c_res[0][0]
+                p_res = g_obj.ro_query(page_cypher, params=params).result_set
+                for r in p_res:
+                    ent_props = dict(r[5]) if isinstance(r[5], dict) else {}
+                    ent_props["source_graph"] = g
+                    all_entities.append({
+                        "id": r[0],
+                        "name": r[1],
+                        "kind": r[2],
+                        "status": r[3],
+                        "source_ref": r[4],
+                        "properties": ent_props,
+                        "source_graph": g,
+                    })
+            except Exception:
+                pass
+
+        return {
+            "total_count": total_count,
+            "offset": offset,
+            "limit": limit,
+            "returned_count": len(all_entities),
+            "has_more": False,
+            "next_offset": None,
+            "entities": all_entities[:limit],
+            "tenant_graph": "ALL_GRAPHS",
+            "searched_graphs": avail,
+        }
+
+    count_rows = execute_ro_query(count_cypher, params=params, graph_name=target_graph)
+    total_count = count_rows[0][0] if count_rows else 0
+
     page_rows = execute_ro_query(page_cypher, params=params, graph_name=target_graph)
 
     entities = [

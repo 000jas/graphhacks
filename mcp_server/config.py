@@ -65,7 +65,7 @@ class Settings:
     password: Optional[str] = os.getenv("FALKORDB_PASSWORD", "aOuxFFj8vO6A") or None
     ssl: bool = os.getenv("FALKORDB_SSL", "false").lower() in ("true", "1", "yes")
 
-    default_graph: str = os.getenv("GRAPHOS_GRAPH_NAME", "graphos_dev")
+    default_graph: str = os.getenv("GRAPHOS_GRAPH_NAME", "ALL_GRAPHS")
     default_tenant: str = os.getenv("GRAPHOS_DEFAULT_TENANT", "default")
     max_traversal_depth: int = int(os.getenv("GRAPHOS_MAX_DEPTH", "6"))
     max_path_limit: int = int(os.getenv("GRAPHOS_MAX_PATH_LIMIT", "50"))
@@ -74,7 +74,7 @@ class Settings:
 
     def validate_graph_name(self, name: Optional[str] = None) -> str:
         """Validate and return safe graph/tenant identifier."""
-        target = (name or self.default_graph).strip()
+        target = (name or self.default_graph or "ALL_GRAPHS").strip()
         return validate_identifier(target, field_name="graph name")
 
     def masked_connection_info(self) -> dict[str, object]:

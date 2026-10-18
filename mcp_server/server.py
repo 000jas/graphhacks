@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
+
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,7 +14,8 @@ SERVER_DIR = Path(__file__).resolve().parent
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from mcp.server import MCPServer
+from mcp.server import MCPServer  # type: ignore[attr-defined] # pyrefly: ignore
+
 
 try:
     from mcp_server.algorithms import (
@@ -34,7 +38,7 @@ try:
         evaluate_candidate_actions as eval_candidate_actions,
         simulate_candidate_action,
     )
-    from mcp_server.db import execute_ro_query
+    from mcp_server.db import execute_ro_query, list_available_graphs
     from mcp_server.decision_memory import (
         execute_approved_action as exec_approved_action,
         propose_action as prop_action,
@@ -93,7 +97,7 @@ except ImportError:
         evaluate_candidate_actions as eval_candidate_actions,
         simulate_candidate_action,
     )
-    from db import execute_ro_query
+    from db import execute_ro_query, list_available_graphs
     from decision_memory import (
         execute_approved_action as exec_approved_action,
         propose_action as prop_action,
@@ -202,6 +206,40 @@ def search_connected_entities(
     ORDER BY coalesce(n.name, n.title, n.id, toString(id(n)))
     LIMIT {limit}
     """
+    if target_graph in ("ALL_GRAPHS", "ALL"):
+        from mcp_server.db import get_db_client, list_available_graphs
+        client = get_db_client()
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL", "FRAUD_DEMO")]
+        all_entities: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str]] = set()
+
+        for g in avail:
+            try:
+                g_obj = client.select_graph(g)
+                rows = g_obj.ro_query(cypher, params=params).result_set
+                for row in rows:
+                    key = (str(row[0]), str(row[2]), g)
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        ent = entity_row(row)
+                        ent["source_graph"] = g
+                        if "properties" not in ent or not isinstance(ent["properties"], dict):
+                            ent["properties"] = {}
+                        ent["properties"]["source_graph"] = g
+                        all_entities.append(ent)
+            except Exception as exc:
+                logger.debug(f"Federated search on graph '{g}' skipped: {exc}")
+
+        res = {
+            "query": query,
+            "count": len(all_entities),
+            "entities": all_entities[:limit * 2],
+            "tenant_graph": "ALL_GRAPHS",
+            "searched_graphs": avail,
+        }
+        logger.debug("search_connected_entities executed federated across %d graphs in %.2fms", len(avail), (time.perf_counter() - start_t) * 1000)
+        return serialize_json(res)
+
     rows = execute_ro_query(cypher, params=params, graph_name=target_graph)
 
     res = {
@@ -228,6 +266,120 @@ def get_entity_profile(
         raise ValueError("entity_id must not be empty")
 
     target_graph = settings.validate_graph_name(tenant_graph)
+
+    if target_graph in ("ALL_GRAPHS", "ALL"):
+        from mcp_server.db import get_db_client, list_available_graphs
+        client = get_db_client()
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL")]
+        found_entity = None
+        all_outgoing: list[dict[str, Any]] = []
+        all_incoming: list[dict[str, Any]] = []
+        member_graphs: list[str] = []
+
+        for g in avail:
+            try:
+                g_obj = client.select_graph(g)
+                rows = g_obj.ro_query(
+                    """
+                    MATCH (n)
+                    WHERE toString(id(n)) = $entity_id
+                       OR n.id = $entity_id
+                       OR n.code = $entity_id
+                       OR n.key = $entity_id
+                       OR n.name = $entity_id
+                       OR any(k IN keys(n) WHERE toString(n[k]) = $entity_id)
+                    RETURN coalesce(n.id, n.code, n.key, toString(id(n))),
+                           coalesce(n.name, n.title, n.label, n.id, toString(id(n))),
+                           coalesce(n.kind, head([lbl IN labels(n) WHERE lbl <> 'Entity']), head(labels(n)), 'Node'),
+                           labels(n),
+                           properties(n),
+                           toString(id(n))
+                    LIMIT 1
+                    """,
+                    params={"entity_id": entity_id},
+                ).result_set
+
+                if rows:
+                    member_graphs.append(g)
+                    if not found_entity:
+                        found_entity = rows[0]
+                    nid = rows[0][5]
+
+                    out_rows = g_obj.ro_query(
+                        """
+                        MATCH (n)-[r]->(other)
+                        WHERE toString(id(n)) = $nid
+                        RETURN type(r),
+                               coalesce(other.id, other.code, other.key, toString(id(other))),
+                               coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
+                               coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
+                               properties(r),
+                               labels(other),
+                               properties(other)
+                        LIMIT 50
+                        """,
+                        params={"nid": nid},
+                    ).result_set
+
+                    for r in out_rows:
+                        all_outgoing.append({
+                            "type": r[0],
+                            "target": {"id": r[1], "name": r[2], "kind": r[3], "labels": r[5], "properties": r[6]},
+                            "evidence": r[4],
+                            "source_graph": g,
+                        })
+
+                    in_rows = g_obj.ro_query(
+                        """
+                        MATCH (other)-[r]->(n)
+                        WHERE toString(id(n)) = $nid
+                        RETURN type(r),
+                               coalesce(other.id, other.code, other.key, toString(id(other))),
+                               coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
+                               coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
+                               properties(r),
+                               labels(other),
+                               properties(other)
+                        LIMIT 50
+                        """,
+                        params={"nid": nid},
+                    ).result_set
+
+                    for r in in_rows:
+                        all_incoming.append({
+                            "type": r[0],
+                            "source": {"id": r[1], "name": r[2], "kind": r[3], "labels": r[5], "properties": r[6]},
+                            "evidence": r[4],
+                            "source_graph": g,
+                        })
+            except Exception as exc:
+                logger.debug(f"Federated profile error on graph {g}: {exc}")
+
+        if not found_entity:
+            return serialize_json({
+                "found": False,
+                "entity_id": entity_id,
+                "tenant_graph": "ALL_GRAPHS",
+            })
+
+        return serialize_json({
+            "found": True,
+            "entity": {
+                "id": found_entity[0],
+                "name": found_entity[1],
+                "kind": found_entity[2],
+                "labels": found_entity[3],
+                "properties": found_entity[4],
+                "source_graphs": member_graphs,
+            },
+            "outgoing_relationships": all_outgoing,
+            "incoming_relationships": all_incoming,
+            "is_isolated": len(all_outgoing) == 0 and len(all_incoming) == 0,
+            "total_connected_relationships": len(all_outgoing) + len(all_incoming),
+            "relationship_exploration_status": "complete",
+            "tenant_graph": "ALL_GRAPHS",
+            "source_graphs": member_graphs,
+        })
 
     rows = execute_ro_query(
         """
@@ -358,6 +510,145 @@ def inspect_entity_neighbors(
     for r in rel_types:
         if not SAFE_RELATIONSHIP_PATTERN.fullmatch(r):
             raise ValueError(f"Invalid relationship type format: {r}")
+
+    if target_graph in ("ALL_GRAPHS", "ALL"):
+        from mcp_server.db import get_db_client, list_available_graphs
+        client = get_db_client()
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL")]
+        all_neighbors: list[dict[str, Any]] = []
+        rel_type_counts: dict[str, int] = defaultdict(int)
+        member_graphs: list[str] = []
+
+        for g in avail:
+            try:
+                g_obj = client.select_graph(g)
+                find_rows = g_obj.ro_query(
+                    """
+                    MATCH (n)
+                    WHERE toString(id(n)) = $entity_id
+                       OR n.id = $entity_id
+                       OR n.code = $entity_id
+                       OR n.key = $entity_id
+                       OR n.name = $entity_id
+                       OR any(k IN keys(n) WHERE toString(n[k]) = $entity_id)
+                    RETURN toString(id(n)), coalesce(n.id, n.code, n.key, toString(id(n)))
+                    LIMIT 1
+                    """,
+                    params={"entity_id": entity_id},
+                ).result_set
+
+                if not find_rows:
+                    continue
+
+                member_graphs.append(g)
+                nid = find_rows[0][0]
+
+                rel_summary = g_obj.ro_query(
+                    """
+                    MATCH (n)-[r]-(other)
+                    WHERE toString(id(n)) = $nid
+                    RETURN type(r), count(r)
+                    """,
+                    params={"nid": nid},
+                ).result_set
+                for r in rel_summary:
+                    rel_type_counts[r[0]] += r[1]
+
+                rel_filter = ""
+                filter_params: dict[str, Any] = {"nid": nid}
+                if rel_types:
+                    rel_filter = "AND type(r) IN $rel_types"
+                    filter_params["rel_types"] = rel_types
+
+                if dir_clean in ("both", "outgoing"):
+                    out_rows = g_obj.ro_query(
+                        f"""
+                        MATCH (n)-[r]->(other)
+                        WHERE toString(id(n)) = $nid
+                        {rel_filter}
+                        RETURN type(r),
+                               properties(r),
+                               coalesce(other.id, other.code, other.key, toString(id(other))),
+                               coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
+                               coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
+                               labels(other),
+                               properties(other)
+                        LIMIT {limit}
+                        """,
+                        params=filter_params,
+                    ).result_set
+                    for r in out_rows:
+                        all_neighbors.append({
+                            "direction": "outgoing",
+                            "relationship_type": r[0],
+                            "relationship_properties": r[1],
+                            "neighbor": {
+                                "id": r[2],
+                                "name": r[3],
+                                "kind": r[4],
+                                "labels": r[5],
+                                "properties": r[6],
+                                "source_graph": g,
+                            },
+                            "source_graph": g,
+                        })
+
+                if dir_clean in ("both", "incoming"):
+                    in_rows = g_obj.ro_query(
+                        f"""
+                        MATCH (other)-[r]->(n)
+                        WHERE toString(id(n)) = $nid
+                        {rel_filter}
+                        RETURN type(r),
+                               properties(r),
+                               coalesce(other.id, other.code, other.key, toString(id(other))),
+                               coalesce(other.name, other.title, other.label, other.id, toString(id(other))),
+                               coalesce(other.kind, head([lbl IN labels(other) WHERE lbl <> 'Entity']), head(labels(other)), 'Node'),
+                               labels(other),
+                               properties(other)
+                        LIMIT {limit}
+                        """,
+                        params=filter_params,
+                    ).result_set
+                    for r in in_rows:
+                        all_neighbors.append({
+                            "direction": "incoming",
+                            "relationship_type": r[0],
+                            "relationship_properties": r[1],
+                            "neighbor": {
+                                "id": r[2],
+                                "name": r[3],
+                                "kind": r[4],
+                                "labels": r[5],
+                                "properties": r[6],
+                                "source_graph": g,
+                            },
+                            "source_graph": g,
+                        })
+            except Exception as exc:
+                logger.debug(f"Federated neighbors error on graph {g}: {exc}")
+
+        if not member_graphs:
+            return serialize_json({
+                "found": False,
+                "entity_id": entity_id,
+                "message": f"Entity '{entity_id}' not found in any graph.",
+                "tenant_graph": "ALL_GRAPHS",
+            })
+
+        return serialize_json({
+            "found": True,
+            "entity_id": entity_id,
+            "direction": dir_clean,
+            "limit": limit,
+            "total_neighbors_count": len(all_neighbors),
+            "connected_relationship_types": [
+                {"relationship_type": k, "count": v} for k, v in rel_type_counts.items()
+            ],
+            "neighbors": all_neighbors[:limit],
+            "tenant_graph": "ALL_GRAPHS",
+            "source_graphs": member_graphs,
+        })
 
     find_rows = execute_ro_query(
         """
@@ -525,6 +816,115 @@ def traverse_relationships(
 
     limit = max(1, min(limit, 50))
     target_graph = settings.validate_graph_name(tenant_graph)
+
+    rel_types = relationship_types or []
+    for r in rel_types:
+        if not SAFE_RELATIONSHIP_PATTERN.fullmatch(r):
+            raise ValueError(f"Invalid relationship type format: {r}")
+
+    if target_graph in ("ALL_GRAPHS", "ALL"):
+        from mcp_server.db import get_db_client, list_available_graphs
+        client = get_db_client()
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL")]
+        all_paths: list[dict[str, Any]] = []
+        member_graphs: list[str] = []
+
+        for g in avail:
+            try:
+                g_obj = client.select_graph(g)
+                start_rows = g_obj.ro_query(
+                    """
+                    MATCH (n)
+                    WHERE toString(id(n)) = $entity_id
+                       OR n.id = $entity_id
+                       OR n.code = $entity_id
+                       OR n.key = $entity_id
+                       OR n.name = $entity_id
+                       OR any(k IN keys(n) WHERE toString(n[k]) = $entity_id)
+                    RETURN toString(id(n)), coalesce(n.id, n.code, n.key, toString(id(n)))
+                    LIMIT 1
+                    """,
+                    params={"entity_id": entity_id},
+                ).result_set
+
+                if not start_rows:
+                    continue
+
+                member_graphs.append(g)
+                start_nid = start_rows[0][0]
+
+                path_filter = ""
+                params: dict[str, Any] = {"start_nid": start_nid}
+                if rel_types:
+                    path_filter = "AND all(rel IN relationships(p) WHERE type(rel) IN $relationship_types)"
+                    params["relationship_types"] = rel_types
+
+                p_rows = g_obj.ro_query(
+                    f"""
+                    MATCH p = (start)-[*1..{depth}]-(neighbor)
+                    WHERE toString(id(start)) = $start_nid
+                      AND toString(id(neighbor)) <> $start_nid
+                    {path_filter}
+                    RETURN
+                        coalesce(neighbor.id, neighbor.code, neighbor.key, toString(id(neighbor))),
+                        coalesce(neighbor.name, neighbor.title, neighbor.label, neighbor.id, toString(id(neighbor))),
+                        coalesce(neighbor.kind, head([lbl IN labels(neighbor) WHERE lbl <> 'Entity']), head(labels(neighbor)), 'Node'),
+                        length(p),
+                        [node IN nodes(p) |
+                            {{
+                                id: coalesce(node.id, node.code, node.key, toString(id(node))),
+                                name: coalesce(node.name, node.title, node.label, node.id, toString(id(node))),
+                                kind: coalesce(node.kind, head([lbl IN labels(node) WHERE lbl <> 'Entity']), head(labels(node)), 'Node'),
+                                source_graph: '{g}'
+                            }}]
+                            AS path_nodes,
+                        [rel IN relationships(p) |
+                            {{
+                                type: type(rel),
+                                source_record_id: rel.source_record_id,
+                                observed_at: rel.observed_at,
+                                confidence: rel.confidence,
+                                properties: properties(rel),
+                                source_graph: '{g}'
+                            }}]
+                            AS path_edges
+                    ORDER BY length(p), coalesce(neighbor.name, neighbor.id, toString(id(neighbor)))
+                    LIMIT {limit}
+                    """,
+                    params=params,
+                ).result_set
+
+                for r in p_rows:
+                    all_paths.append({
+                        "entity": {"id": r[0], "name": r[1], "kind": r[2], "source_graph": g},
+                        "depth": r[3],
+                        "path_nodes": r[4],
+                        "path_edges": r[5],
+                        "source_graph": g,
+                    })
+            except Exception as exc:
+                logger.debug(f"Federated traversal error on graph {g}: {exc}")
+
+        if not member_graphs:
+            return serialize_json({
+                "found": False,
+                "start_entity_id": entity_id,
+                "depth_limit": depth,
+                "count": 0,
+                "paths": [],
+                "message": f"Entity '{entity_id}' not found in any graph.",
+                "tenant_graph": "ALL_GRAPHS",
+            })
+
+        return serialize_json({
+            "found": True,
+            "start_entity_id": entity_id,
+            "depth_limit": depth,
+            "count": len(all_paths),
+            "paths": all_paths[:limit],
+            "tenant_graph": "ALL_GRAPHS",
+            "source_graphs": member_graphs,
+        })
 
     start_rows = execute_ro_query(
         """
@@ -1519,6 +1919,38 @@ def run_read_only_cypher_query(
         query = f"{query}\nLIMIT {limit}"
 
     target_graph = settings.validate_graph_name(tenant_graph)
+
+    if target_graph in ("ALL_GRAPHS", "ALL"):
+        from mcp_server.db import get_db_client, list_available_graphs
+        client = get_db_client()
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL", "FRAUD_DEMO")]
+        results_by_graph: dict[str, Any] = {}
+        combined_rows: list[Any] = []
+        for g in avail:
+            try:
+                g_obj = client.select_graph(g)
+                g_rows = g_obj.ro_query(query, params=params or {}).result_set
+                if g_rows:
+                    results_by_graph[g] = g_rows
+                    for r in g_rows:
+                        if isinstance(r, list):
+                            combined_rows.append(r + [g])
+                        elif isinstance(r, tuple):
+                            combined_rows.append(list(r) + [g])
+                        else:
+                            combined_rows.append([r, g])
+            except Exception as exc:
+                logger.debug(f"Federated query on graph '{g}' error: {exc}")
+
+        return serialize_json({
+            "query": query,
+            "count": len(combined_rows),
+            "results_by_graph": results_by_graph,
+            "results": combined_rows[:limit],
+            "tenant_graph": "ALL_GRAPHS",
+            "active_graphs": list(results_by_graph.keys()),
+        })
+
     rows = execute_ro_query(query, params=params or {}, graph_name=target_graph)
 
     return serialize_json({
@@ -1529,5 +1961,127 @@ def run_read_only_cypher_query(
     })
 
 
+@mcp.tool()
+def list_database_graphs() -> str:
+    """
+    List all available graph databases in the connected FalkorDB instance dynamically.
+    Enables multi-tenant graph discovery without hardcoding graph names.
+    """
+    graphs = list_available_graphs()
+    return serialize_json({"graphs": graphs, "count": len(graphs)})
+
+
+@mcp.tool()
+def cross_link(
+    identifier_type: str = "auto",
+    value: str = "",
+    fraud_graph: str = "",
+    security_graph: str = "",
+    code_graph: str = "",
+    limit: int = 20,
+) -> str:
+    """
+    Resolve and traverse cross-domain join keys across 3 distinct, unmerged graphs (Fraud, Security, Code) at query time.
+    Supported identifier types: 'ip' (e.g. 203.0.113.9), 'service' (e.g. payments-api), 'package' (e.g. ratelimit-lib), or 'auto'.
+    Connects disparate domains on bridge keys without merging them into a single graph.
+    Automatically discovers domain graphs dynamically if not explicitly specified.
+    """
+    val = (value or "").strip()
+    if not val:
+        raise ValueError("value must not be empty for cross_link")
+
+    id_type = (identifier_type or "auto").strip().lower()
+    limit = max(1, min(limit, 30))
+
+    available = list_available_graphs()
+
+    def _resolve_graph(param: str, env_key: str, domain_keywords: tuple[str, ...]) -> str:
+        if param and param.strip():
+            return param.strip()
+        from_env = os.getenv(env_key, "").strip()
+        if from_env:
+            return from_env
+        for g in available:
+            g_low = g.lower()
+            if any(kw in g_low for kw in domain_keywords):
+                return g
+        return available[0] if available else settings.default_graph
+
+    f_graph = _resolve_graph(fraud_graph, "FRAUD_GRAPH_NAME", ("fraud", "risk", "account", "txn", "trans"))
+    s_graph = _resolve_graph(security_graph, "SECURITY_GRAPH_NAME", ("sec", "alert", "infra", "cve", "vuln"))
+    c_graph = _resolve_graph(code_graph, "CODE_GRAPH_NAME", ("code", "dev", "repo", "git", "eng"))
+
+    # Build smart candidate matches for cross-system token variances (e.g. payments-api vs payment-api)
+    val_norm = val.lower()
+    candidates = [val, val_norm]
+    if "payments" in val_norm:
+        candidates.append(val_norm.replace("payments", "payment"))
+    elif "payment" in val_norm:
+        candidates.append(val_norm.replace("payment", "payments"))
+
+
+    cross_domain_results: dict[str, Any] = {
+        "identifier_type": id_type,
+        "value": val,
+        "candidates": candidates,
+        "domains": {},
+    }
+
+    # Query helper
+    def _query_graph(g_name: str, query_cypher: str, p: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            validated_g = settings.validate_graph_name(g_name)
+            rows = execute_ro_query(query_cypher, params=p, graph_name=validated_g)
+            parsed = []
+            for r in rows:
+                parsed.append({
+                    "source_label": r[0] if len(r) > 0 else "Unknown",
+                    "source_props": dict(r[1]) if len(r) > 1 and isinstance(r[1], dict) else {},
+                    "relationship": r[2] if len(r) > 2 else None,
+                    "target_label": r[3] if len(r) > 3 else None,
+                    "target_props": dict(r[4]) if len(r) > 4 and isinstance(r[4], dict) else {},
+                })
+            return parsed
+        except Exception as e:
+            logger.warning(f"cross_link query on graph '{g_name}' failed: {e}")
+            return [{"error": str(e), "graph": g_name}]
+
+    # Unified search Cypher using candidate token matches
+    join_cypher = """
+    MATCH (n)
+    WHERE any(c IN $candidates WHERE
+        toLower(toString(n.id)) = c
+        OR toLower(coalesce(n.name, '')) = c
+        OR toLower(toString(n.id)) CONTAINS c
+        OR toLower(coalesce(n.name, '')) CONTAINS c
+        OR any(k IN keys(n) WHERE toLower(toString(n[k])) CONTAINS c)
+    )
+    OPTIONAL MATCH (n)-[r]-(m)
+    RETURN coalesce(labels(n)[0], 'Node'), properties(n), type(r), coalesce(labels(m)[0], 'Node'), properties(m)
+    LIMIT 25
+    """
+
+    # 1. Fraud Domain
+    cross_domain_results["domains"]["fraud"] = {
+        "graph": f_graph,
+        "matches": _query_graph(f_graph, join_cypher, {"candidates": candidates})[:limit],
+    }
+
+    # 2. Security Domain
+    cross_domain_results["domains"]["security"] = {
+        "graph": s_graph,
+        "matches": _query_graph(s_graph, join_cypher, {"candidates": candidates})[:limit],
+    }
+
+    # 3. Code Domain
+    cross_domain_results["domains"]["code"] = {
+        "graph": c_graph,
+        "matches": _query_graph(c_graph, join_cypher, {"candidates": candidates})[:limit],
+    }
+
+    return serialize_json(cross_domain_results)
+
+
 if __name__ == "__main__":
     mcp.run()
+

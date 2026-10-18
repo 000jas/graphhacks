@@ -538,6 +538,7 @@ class EvidenceCollector:
             "duplicate_records_detected": self.duplicate_records_count,
             "provenance_verification_rate": verif_rate,
             "entities": {eid: fact.to_dict() for eid, fact in self.entities.items()},
+            "edges": [asdict(e) for e in self.edges],
             "key_paths": [p.to_dict() for p in self.paths[:10]],
             "policy_evaluations": self.policy_results,
             "unresolved_gaps": list(set(self.unresolved_gaps)),

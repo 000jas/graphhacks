@@ -4,16 +4,27 @@ import React, { useState, useEffect } from "react";
 import { Hero } from "../components/Hero";
 import { Workspace } from "../components/Workspace";
 import { InteractiveDotGrid } from "../components/InteractiveDotGrid";
+import { ImportDatasetModal } from "../components/ImportDatasetModal";
 import { HealthStatus, GraphSchemaProfile } from "../types";
-import { getHealth, getSchema } from "../lib/api";
-import { Database, Network, ArrowRight, ShieldCheck, Activity, Sparkles } from "lucide-react";
+import { getHealth, getSchema, getAvailableGraphs } from "../lib/api";
+import { Database, Network, ArrowRight, ShieldCheck, Activity, Sparkles, Upload } from "lucide-react";
 
 export default function Home() {
   const [view, setView] = useState<"landing" | "workspace">("landing");
   const [mode, setMode] = useState<"live" | "demo">("live");
   const [activeQuery, setActiveQuery] = useState<string>("");
+  const [selectedGraph, setSelectedGraph] = useState<string>("ALL_GRAPHS");
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [schemaProfile, setSchemaProfile] = useState<GraphSchemaProfile | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [availableGraphs, setAvailableGraphs] = useState<string[]>([
+    "ALL_GRAPHS",
+    "fraud_swiftpay",
+    "graphos_dev",
+    "security_swiftpay",
+    "fraud_Front",
+    "swiftpay_unified",
+  ]);
 
   useEffect(() => {
     getHealth().then((h) => {
@@ -22,8 +33,16 @@ export default function Home() {
         setMode("demo");
       }
     });
-    getSchema().then((s) => {
+    getSchema("ALL_GRAPHS").then((s) => {
       if (s) setSchemaProfile(s);
+    });
+    getAvailableGraphs().then((res) => {
+      if (res && res.graphs) {
+        setAvailableGraphs(res.graphs);
+        if (res.active_graph) {
+          setSelectedGraph(res.active_graph);
+        }
+      }
     });
   }, []);
 
@@ -44,11 +63,23 @@ export default function Home() {
     setMode((prev) => (prev === "live" ? "demo" : "live"));
   };
 
+  const handleIngestSuccess = (graphName: string) => {
+    setSelectedGraph(graphName);
+    getAvailableGraphs().then((res) => {
+      if (res && res.graphs) {
+        setAvailableGraphs(res.graphs);
+      }
+    });
+    setIsImportModalOpen(false);
+    setView("workspace");
+  };
+
   if (view === "workspace") {
     return (
       <Workspace
         initialQuery={activeQuery}
         initialMode={mode}
+        initialGraph={selectedGraph}
         onBackToLanding={handleBackToLanding}
       />
     );
@@ -64,12 +95,21 @@ export default function Home() {
         {/* Ambient celestial glow orb behind the headline */}
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[950px] h-[450px] ambient-glow pointer-events-none rounded-full blur-3xl opacity-80" />
 
-        {/* Clean top corner mode toggle — interactive button without clutter */}
-        <div className="relative z-30 max-w-7xl mx-auto px-6 flex justify-end">
+        {/* Clean top corner mode toggle & dataset import */}
+        <div className="relative z-30 max-w-7xl mx-auto px-6 flex items-center justify-end gap-3">
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white/10 hover:bg-white/20 border border-white/25 text-white backdrop-blur-md transition shadow-sm cursor-pointer"
+            title="Import CLI Code Parser JSON, Live CSV, or Connect Supabase"
+          >
+            <Upload className="w-3.5 h-3.5 text-[#38bdf8]" />
+            <span>Import Dataset</span>
+          </button>
+
           <button
             onClick={handleToggleMode}
             title="Toggle execution mode between live agent and verified demo scenarios"
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-md transition shadow-sm ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-md transition shadow-sm cursor-pointer ${
               mode === "live"
                 ? "bg-[#1678ef]/30 border-[#38bdf8]/50 text-[#7dd3fc] hover:bg-[#1678ef]/40"
                 : "bg-amber-500/20 border-amber-400/40 text-amber-300 hover:bg-amber-500/30"
@@ -177,15 +217,31 @@ export default function Home() {
             )}
           </div>
 
-          <button
-            onClick={handleOpenWorkspace}
-            className="shrink-0 flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-semibold text-white bg-gradient-to-r from-[#1678ef] via-[#268cf5] to-[#00d2ff] hover:brightness-110 shadow-lg shadow-[#1678ef]/30 transition transform hover:-translate-y-0.5 active:translate-y-0"
-          >
-            <span>Open Chatbot Workspace</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
+          <div className="shrink-0 flex items-center gap-3">
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-3 rounded-2xl text-xs font-semibold text-[#1678ef] bg-[#eff7ff] hover:bg-[#1678ef]/10 border border-[#1678ef]/20 transition cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Import Dataset</span>
+            </button>
+            <button
+              onClick={handleOpenWorkspace}
+              className="flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-semibold text-white bg-gradient-to-r from-[#1678ef] via-[#268cf5] to-[#00d2ff] hover:brightness-110 shadow-lg shadow-[#1678ef]/30 transition transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer"
+            >
+              <span>Open Chatbot Workspace</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
+
+      <ImportDatasetModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onIngestSuccess={handleIngestSuccess}
+        availableGraphs={availableGraphs}
+      />
 
       {/* Clean footer */}
       <footer className="relative z-10 border-t border-[#4370aa]/15 bg-white py-6 px-6 text-center text-xs text-[#71849e]">

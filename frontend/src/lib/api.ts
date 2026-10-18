@@ -20,15 +20,41 @@ export async function getHealth(): Promise<HealthStatus | null> {
   }
 }
 
-export async function getSchema(): Promise<GraphSchemaProfile | null> {
+export async function getAvailableGraphs(): Promise<{ graphs: string[]; active_graph: string } | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/schema`, {
+    const res = await fetch(`${API_BASE_URL}/api/graphs`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function getSchema(tenantGraph?: string): Promise<GraphSchemaProfile | null> {
+  try {
+    const url = tenantGraph
+      ? `${API_BASE_URL}/api/schema?tenant_graph=${encodeURIComponent(tenantGraph)}`
+      : `${API_BASE_URL}/api/schema`;
+    const res = await fetch(url, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
     if (!res.ok) return null;
     const data = await res.json();
     return data.schema || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getGraphPreview(tenantGraph?: string): Promise<{ graph_name: string; entities: Record<string, any>; edges: any[] } | null> {
+  try {
+    const url = tenantGraph
+      ? `${API_BASE_URL}/api/graph/preview?tenant_graph=${encodeURIComponent(tenantGraph)}`
+      : `${API_BASE_URL}/api/graph/preview`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
   } catch {
     return null;
   }
@@ -49,7 +75,8 @@ export async function getDemoScenario(scenario: string): Promise<InvestigationRe
 export async function executeInvestigationStream(
   objective: string,
   mode: "live" | "demo",
-  onEvent: (event: InvestigationEvent) => void
+  onEvent: (event: InvestigationEvent) => void,
+  tenantGraph?: string
 ): Promise<InvestigationResult> {
   if (mode === "demo") {
     const scenarioKey = objective.toLowerCase().includes("fraud") || objective.toLowerCase().includes("transaction")
@@ -113,7 +140,7 @@ export async function executeInvestigationStream(
     const res = await fetch(`${API_BASE_URL}/api/investigate/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ objective, mode: "live" }),
+      body: JSON.stringify({ objective, mode: "live", tenant_graph: tenantGraph }),
     });
 
     if (!res.ok) {
@@ -162,7 +189,7 @@ export async function executeInvestigationStream(
     const syncRes = await fetch(`${API_BASE_URL}/api/investigate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ objective, mode: "live" }),
+      body: JSON.stringify({ objective, mode: "live", tenant_graph: tenantGraph || "ALL_GRAPHS" }),
     });
     return await syncRes.json();
   } catch (err: any) {
@@ -177,7 +204,63 @@ export async function executeInvestigationStream(
   }
 }
 
+export async function ingestCodeJson(
+  data: any,
+  graphName: string = "graphos_dev"
+): Promise<{ status: string; graph_name: string; nodes_ingested: number; edges_ingested: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/ingest/code-json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ graph_name: graphName, data }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Ingestion failed" }));
+    throw new Error(err.detail || "Failed to ingest code AST JSON");
+  }
+  return await res.json();
+}
+
+export async function ingestCsv(
+  csvText: string,
+  graphName: string = "swiftpay_unified",
+  domain: string = "general"
+): Promise<{ status: string; graph_name: string; rows_processed: number; domain_detected: string; nodes_ingested: number; edges_ingested: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/ingest/csv`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ graph_name: graphName, csv_text: csvText, domain }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "CSV ingestion failed" }));
+    throw new Error(err.detail || "Failed to ingest CSV");
+  }
+  return await res.json();
+}
+
+export async function approveRemediation(
+  actionType: string,
+  targetId: string,
+  rationale: string,
+  tenantGraph?: string
+): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/remediation/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_type: actionType,
+      target_id: targetId,
+      rationale,
+      tenant_graph: tenantGraph,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error("Failed to approve remediation action");
+  }
+  return await res.json();
+}
+
 export const LOCAL_DEMO_FIXTURES: Record<string, InvestigationResult> = {
+
   fraud: {
     objective: "Investigate suspicious transactions and find connected entities or transaction paths that may be relevant.",
     success: true,

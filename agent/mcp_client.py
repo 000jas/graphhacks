@@ -88,7 +88,7 @@ class MCPClientManager:
             if hasattr(self, "_sse_ctx") and self._sse_ctx:
                 await self._sse_ctx.__aexit__(None, None, None)
             logger.info("MCP client disconnected cleanly.")
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError, BaseException) as exc:
             logger.debug(f"Error during MCP disconnect: {exc}")
         finally:
             self.session = None
@@ -132,8 +132,9 @@ class MCPClientManager:
 
             output_parts = []
             for block in res.content:
-                if hasattr(block, "text"):
-                    output_parts.append(block.text)
+                text_val = getattr(block, "text", None)
+                if text_val is not None:
+                    output_parts.append(str(text_val))
                 else:
                     output_parts.append(str(block))
 

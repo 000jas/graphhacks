@@ -136,6 +136,8 @@ async def async_main(args: argparse.Namespace) -> int:
         settings.llm_provider = args.provider.strip().lower()
     if getattr(args, "model", None):
         settings.llm_model = args.model.strip()
+    if getattr(args, "graph", None):
+        settings.graph_name = args.graph.strip()
     if getattr(args, "max_iterations", None):
         settings.max_iterations = int(args.max_iterations)
 
@@ -267,6 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("-v", "--version", action="version", version=f"graphos {__version__}")
     parser.add_argument("-q", "--query", type=str, help="Execute a one-shot investigation query")
+    parser.add_argument("-g", "--graph", type=str, help="Override target FalkorDB graph (e.g. swiftpay_unified, graphos_dev)")
     parser.add_argument("--provider", type=str, choices=["nvidia", "openai", "anthropic", "ollama", "mock"], help="Override active LLM provider")
     parser.add_argument("--model", type=str, help="Override LLM model identifier")
     parser.add_argument("--max-iterations", type=int, help="Override maximum iteration budget")
@@ -279,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_parser = subparsers.add_parser("ask", help="Execute a one-shot investigation query")
     ask_parser.add_argument("query", type=str, help="Investigation question or objective")
+    ask_parser.add_argument("-g", "--graph", type=str, default=argparse.SUPPRESS, help="Override target FalkorDB graph")
     ask_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     ask_parser.add_argument("--quiet", action="store_true", help="Suppress intermediate streaming")
     ask_parser.add_argument("--provider", type=str, choices=["nvidia", "openai", "anthropic", "ollama", "mock"], default=argparse.SUPPRESS, help="Override provider")
@@ -286,21 +290,26 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--max-iterations", type=int, default=argparse.SUPPRESS, help="Override maximum iterations")
 
     status_parser = subparsers.add_parser("status", help="Live status of provider, FalkorDB, and MCP server")
+    status_parser.add_argument("-g", "--graph", type=str, default=argparse.SUPPRESS, help="Override target FalkorDB graph")
     status_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     doctor_parser = subparsers.add_parser("doctor", help="Run comprehensive diagnostics and troubleshooting checks")
+    doctor_parser.add_argument("-g", "--graph", type=str, default=argparse.SUPPRESS, help="Override target FalkorDB graph")
     doctor_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     config_parser = subparsers.add_parser("config", help="Display safe configuration settings with secrets masked")
     config_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     tools_parser = subparsers.add_parser("tools", help="List discovered read-only MCP tools")
+    tools_parser.add_argument("-g", "--graph", type=str, default=argparse.SUPPRESS, help="Override target FalkorDB graph")
     tools_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     schema_parser = subparsers.add_parser("schema", help="Inspect discovered runtime graph schema and topological properties")
+    schema_parser.add_argument("-g", "--graph", type=str, default=argparse.SUPPRESS, help="Override target FalkorDB graph")
     schema_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     refresh_parser = subparsers.add_parser("refresh", help="Force dynamic re-discovery of graph schema from FalkorDB")
+    refresh_parser.add_argument("-g", "--graph", type=str, default=argparse.SUPPRESS, help="Override target FalkorDB graph")
     refresh_parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     subparsers.add_parser("repl", help="Start the interactive terminal REPL")
