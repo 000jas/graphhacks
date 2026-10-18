@@ -101,6 +101,21 @@ class AgentSettings:
             or "ALL_GRAPHS"
         ).strip()
     )
+    falkordb_host: str = field(
+        default_factory=lambda: os.getenv("FALKORDB_HOST", "127.0.0.1").strip()
+    )
+    falkordb_port: int = field(
+        default_factory=lambda: int(os.getenv("FALKORDB_PORT", "6379"))
+    )
+    falkordb_username: Optional[str] = field(
+        default_factory=lambda: os.getenv("FALKORDB_USERNAME") or None
+    )
+    falkordb_password: Optional[str] = field(
+        default_factory=lambda: os.getenv("FALKORDB_PASSWORD") or None
+    )
+    falkordb_ssl: bool = field(
+        default_factory=lambda: os.getenv("FALKORDB_SSL", "false").lower() in ("true", "1", "yes")
+    )
 
 
     agent_name: str = field(

@@ -66,24 +66,23 @@ def get_db_client() -> FalkorDB:
     try:
         client = FalkorDB(**kwargs)
         client.connection.ping()
-        logger.debug(f"Connected to FalkorDB Cloud at {settings.host}:{settings.port} (ssl={settings.ssl})")
+        logger.debug(f"Connected to FalkorDB Cloud at {settings.host}:{settings.port} (ssl={kwargs['ssl']})")
         return client
     except Exception as exc:
-        if settings.ssl:
-            logger.warning(
-                f"SSL connection to {settings.host}:{settings.port} failed ({exc}). Retrying with plaintext RESP..."
-            )
-            kwargs["ssl"] = False
-            try:
-                fallback_client = FalkorDB(**kwargs)
-                fallback_client.connection.ping()
-                logger.debug("Fallback connection established to FalkorDB Cloud (ssl=False)")
-                return fallback_client
-            except Exception as fallback_exc:
-                raise GraphError(
-                    f"Failed to connect to FalkorDB Cloud: {type(fallback_exc).__name__}"
-                ) from fallback_exc
-        raise GraphError(f"Failed to connect to FalkorDB Cloud: {type(exc).__name__}") from exc
+        opposite_ssl = not kwargs["ssl"]
+        logger.warning(
+            f"FalkorDB connection with ssl={kwargs['ssl']} to {settings.host}:{settings.port} failed ({exc}). Retrying with ssl={opposite_ssl}..."
+        )
+        kwargs["ssl"] = opposite_ssl
+        try:
+            fallback_client = FalkorDB(**kwargs)
+            fallback_client.connection.ping()
+            logger.debug(f"Fallback connection established to FalkorDB Cloud (ssl={opposite_ssl})")
+            return fallback_client
+        except Exception as fallback_exc:
+            raise GraphError(
+                f"Failed to connect to FalkorDB Cloud at {settings.host}:{settings.port}: {type(fallback_exc).__name__} ({fallback_exc})"
+            ) from fallback_exc
 
 
 class FederatedQueryResult:

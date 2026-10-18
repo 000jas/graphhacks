@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 from mcp import ClientSession, StdioServerParameters
@@ -38,13 +40,32 @@ class MCPClientManager:
 
             args_parts = self.settings.mcp_server_args.split()
             cwd = self.settings.mcp_server_cwd
+            cwd_str = str(cwd) if cwd else str(Path(__file__).resolve().parent.parent)
 
-            logger.info(f"Connecting to MCP server via stdio: '{cmd} {' '.join(args_parts)}' (cwd={cwd})")
+            logger.info(f"Connecting to MCP server via stdio: '{cmd} {' '.join(args_parts)}' (cwd={cwd_str})")
+
+            # Forward parent process environment variables to MCP subprocess so credentials and cloud configs are never lost
+            server_env = dict(os.environ)
+            if hasattr(self.settings, "falkordb_host") and self.settings.falkordb_host:
+                server_env["FALKORDB_HOST"] = str(self.settings.falkordb_host)
+            if hasattr(self.settings, "falkordb_port") and self.settings.falkordb_port:
+                server_env["FALKORDB_PORT"] = str(self.settings.falkordb_port)
+            if hasattr(self.settings, "falkordb_username") and self.settings.falkordb_username:
+                server_env["FALKORDB_USERNAME"] = str(self.settings.falkordb_username)
+            if hasattr(self.settings, "falkordb_password") and self.settings.falkordb_password:
+                server_env["FALKORDB_PASSWORD"] = str(self.settings.falkordb_password)
+            if hasattr(self.settings, "falkordb_ssl") and self.settings.falkordb_ssl is not None:
+                server_env["FALKORDB_SSL"] = str(self.settings.falkordb_ssl).lower()
+
+            # Ensure PYTHONPATH contains project root
+            existing_pp = server_env.get("PYTHONPATH", "")
+            server_env["PYTHONPATH"] = f"{cwd_str}:{existing_pp}" if existing_pp else cwd_str
 
             server_params = StdioServerParameters(
                 command=cmd,
                 args=args_parts,
-                env=None,
+                env=server_env,
+                cwd=cwd_str,
             )
 
             self._stdio_ctx = stdio_client(server_params)
