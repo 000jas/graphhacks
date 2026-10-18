@@ -32,6 +32,9 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Trash2,
+  Plus,
+  Lock,
 } from "lucide-react";
 import {
   InvestigationResult,
@@ -39,6 +42,10 @@ import {
   HealthStatus,
   GraphSchemaProfile,
   EntityFact,
+  User,
+  ConversationSummary,
+  ConversationDetail,
+  ChatMessageRecord,
 } from "../types";
 import {
   executeInvestigationStream,
@@ -47,10 +54,16 @@ import {
   getAvailableGraphs,
   getGraphPreview,
   approveRemediation,
+  getMe,
+  logoutUser,
+  getConversations,
+  getConversation,
+  deleteConversation,
 } from "../lib/api";
 import { GraphExplorer } from "./GraphExplorer";
 import { ImportDatasetModal } from "./ImportDatasetModal";
 import { FormattedMarkdown } from "./FormattedMarkdown";
+import { AuthModal } from "./AuthModal";
 
 const EMPTY_KEY_PATHS: any[] = [];
 const EMPTY_ENTITIES: Record<string, EntityFact> = {};
@@ -85,12 +98,37 @@ export function Workspace({
   const [schemaProfile, setSchemaProfile] = useState<GraphSchemaProfile | null>(null);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [pastMessages, setPastMessages] = useState<ChatMessageRecord[]>([]);
+  const [isDeletingConvId, setIsDeletingConvId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [actionApproved, setActionApproved] = useState(false);
   const [isApprovingAction, setIsApprovingAction] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [isReasoningExpanded, setIsReasoningExpanded] = useState<boolean>(true);
   const [copiedAnswer, setCopiedAnswer] = useState<boolean>(false);
+
+  const refreshConversations = async () => {
+    try {
+      const list = await getConversations();
+      setConversations(list);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Load user and conversations on mount
+  useEffect(() => {
+    getMe().then((u) => {
+      if (u) {
+        setUser(u);
+        getConversations().then(setConversations);
+      }
+    });
+  }, []);
 
   // Load real user sessions from localStorage on mount
   useEffect(() => {
@@ -209,6 +247,94 @@ export function Workspace({
     }
   }, [initialQuery]);
 
+  const handleAuthSuccess = (u: User) => {
+    setUser(u);
+    refreshConversations();
+    if (queryInput.trim()) {
+      handleRunInvestigation(queryInput.trim());
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    setUser(null);
+    setConversations([]);
+    setActiveConversationId(null);
+    setPastMessages([]);
+    onBackToLanding();
+  };
+
+  const handleStartNewInvestigation = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsInvestigating(false);
+    setActiveConversationId(null);
+    setCurrentObjective("");
+    setQueryInput("");
+    setEvents([]);
+    setCurrentResult(null);
+    setPastMessages([]);
+    setIsSidebarOpen(false);
+  };
+
+  const handleSelectConversation = async (convId: string) => {
+    try {
+      const conv = await getConversation(convId);
+      if (!conv) return;
+
+      setActiveConversationId(conv.id);
+      setCurrentObjective(conv.title);
+      if (conv.graph_name && availableGraphs.includes(conv.graph_name)) {
+        handleGraphChange(conv.graph_name);
+      }
+      setPastMessages(conv.messages || []);
+
+      // Find the most recent assistant message with evidence summary to restore right-hand graph canvas
+      const lastAssistant = [...(conv.messages || [])]
+        .reverse()
+        .find((m) => m.role === "assistant" && m.metadata?.evidence_summary);
+
+      if (lastAssistant && lastAssistant.metadata?.evidence_summary) {
+        setCurrentResult({
+          objective: conv.title,
+          success: true,
+          final_answer: lastAssistant.content,
+          evidence_summary: lastAssistant.metadata.evidence_summary,
+          steps: lastAssistant.metadata.steps || [],
+          total_iterations: lastAssistant.metadata.total_iterations || 1,
+          total_tool_calls: lastAssistant.metadata.total_tool_calls || 0,
+          duration_seconds: lastAssistant.metadata.duration_seconds || 1.0,
+        });
+        setEvents([]);
+      } else {
+        setCurrentResult(null);
+        setEvents([]);
+      }
+      setIsSidebarOpen(false);
+    } catch (err) {
+      console.error("Failed to load conversation:", err);
+    }
+  };
+
+  const handleDeleteConversation = async (e: React.MouseEvent, convId: string) => {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this investigation?")) return;
+    setIsDeletingConvId(convId);
+    try {
+      const ok = await deleteConversation(convId);
+      if (ok) {
+        if (activeConversationId === convId) {
+          handleStartNewInvestigation();
+        }
+        await refreshConversations();
+      }
+    } finally {
+      setIsDeletingConvId(null);
+    }
+  };
+
   const handleStopInvestigation = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -219,6 +345,11 @@ export function Workspace({
 
   const handleRunInvestigation = async (queryToRun: string) => {
     if (!queryToRun.trim()) return;
+
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
 
     // Abort any ongoing investigation
     if (abortControllerRef.current) {
@@ -234,7 +365,20 @@ export function Workspace({
     setCurrentResult(null);
     setSelectedEntityId(null);
 
-    // Add real query to recent sessions and persist in localStorage
+    // If user is logged in, append question to past messages view immediately
+    if (user) {
+      setPastMessages((prev) => [
+        ...prev,
+        {
+          id: `tmp-${Date.now()}`,
+          role: "user",
+          content: queryToRun,
+          timestamp: Date.now() / 1000,
+        },
+      ]);
+    }
+
+    // Add query to recent sessions and persist in localStorage
     setRecentSessions((prev) => {
       const updated = [
         {
@@ -269,11 +413,30 @@ export function Workspace({
           });
         },
         selectedGraph,
-        controller.signal
+        controller.signal,
+        activeConversationId || undefined,
+        (assignedId) => {
+          setActiveConversationId(assignedId);
+          refreshConversations();
+        }
       );
       if (!controller.signal.aborted) {
         setCurrentResult(result);
         setIsReasoningExpanded(false);
+
+        if (user && result && result.final_answer) {
+          setPastMessages((prev) => [
+            ...prev,
+            {
+              id: `tmp-res-${Date.now()}`,
+              role: "assistant",
+              content: result.final_answer,
+              metadata: { evidence_summary: result.evidence_summary },
+              timestamp: Date.now() / 1000,
+            },
+          ]);
+          refreshConversations();
+        }
       }
     } catch (err: any) {
       if (controller.signal.aborted || err?.name === "AbortError") {
@@ -297,6 +460,10 @@ export function Workspace({
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!queryInput.trim()) return;
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     handleRunInvestigation(queryInput.trim());
     setQueryInput("");
   };
@@ -349,13 +516,7 @@ export function Workspace({
         {/* New Investigation Button */}
         <div className="p-4">
           <button
-            onClick={() => {
-              setCurrentResult(null);
-              setEvents([]);
-              setCurrentObjective("");
-              setQueryInput("");
-              setIsSidebarOpen(false);
-            }}
+            onClick={handleStartNewInvestigation}
             className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-[#1678ef] to-[#268cf5] hover:from-[#1b80ff] hover:to-[#389aff] shadow-md shadow-[#1678ef]/20 transition cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
@@ -409,34 +570,97 @@ export function Workspace({
           </div>
         </div>
 
-        {/* Recent Investigations */}
+        {/* Chat History / Recent Investigations */}
         <div className="flex-1 overflow-y-auto px-4 py-3 border-t border-[#4370aa]/15">
           <span className="text-[10px] font-bold uppercase tracking-wider text-[#71849e] mb-2 block">
-            Recent Investigations
+            {user ? "Chat History (FalkorDB)" : "Recent Investigations"}
           </span>
-          <div className="space-y-1.5">
-            {recentSessions.length > 0 ? (
-              recentSessions.map((s) => (
+
+          {user ? (
+            <div className="space-y-1.5">
+              {conversations.length > 0 ? (
+                conversations.map((c) => (
+                  <div
+                    key={c.id}
+                    onClick={() => handleSelectConversation(c.id)}
+                    className={`w-full text-left p-2.5 rounded-xl text-xs border transition flex items-center justify-between group cursor-pointer ${
+                      activeConversationId === c.id
+                        ? "bg-[#eff7ff] border-[#1678ef]/30 text-[#1678ef]"
+                        : "hover:bg-[#eff7ff] border-transparent text-[#102f58]"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1 pr-2">
+                      <span className="font-medium line-clamp-1 group-hover:text-[#1678ef] block">
+                        {c.title}
+                      </span>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[9px] font-semibold text-[#1678ef] bg-[#eff7ff] px-1.5 py-0.5 rounded border border-[#1678ef]/15">
+                          {c.graph_name}
+                        </span>
+                        <span className="text-[10px] text-[#71849e]">
+                          {new Date(c.updated_at * 1000).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteConversation(e, c.id)}
+                      disabled={isDeletingConvId === c.id}
+                      className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 transition cursor-pointer"
+                      title="Delete conversation"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="text-[11px] text-[#71849e] italic py-2">
+                  No saved investigations yet. Enter an objective to begin.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="space-y-1.5">
+                {recentSessions.length > 0 ? (
+                  recentSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        handleRunInvestigation(s.query);
+                        setIsSidebarOpen(false);
+                      }}
+                      className="w-full text-left p-2.5 rounded-xl text-xs hover:bg-[#eff7ff] border border-transparent hover:border-[#1678ef]/20 transition flex flex-col gap-0.5 group cursor-pointer"
+                    >
+                      <span className="font-medium text-[#102f58] line-clamp-2 group-hover:text-[#1678ef]">
+                        {s.query}
+                      </span>
+                      <span className="text-[10px] text-[#71849e]">{s.timestamp}</span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="text-[11px] text-[#71849e] italic py-2">
+                    No recent investigations. Enter an objective to begin.
+                  </p>
+                )}
+              </div>
+              <div className="mt-4 p-3 rounded-xl bg-blue-50/60 border border-blue-200/50 text-[11px] text-[#102f58]">
+                <p className="font-semibold mb-1">Persistent History</p>
+                <p className="text-[#71849e] mb-2 leading-relaxed">
+                  Sign in to save and restore your investigations across sessions.
+                </p>
                 <button
-                  key={s.id}
-                  onClick={() => {
-                    handleRunInvestigation(s.query);
-                    setIsSidebarOpen(false);
-                  }}
-                  className="w-full text-left p-2.5 rounded-xl text-xs hover:bg-[#eff7ff] border border-transparent hover:border-[#1678ef]/20 transition flex flex-col gap-0.5 group cursor-pointer"
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="w-full py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition cursor-pointer shadow-xs text-center"
                 >
-                  <span className="font-medium text-[#102f58] line-clamp-2 group-hover:text-[#1678ef]">
-                    {s.query}
-                  </span>
-                  <span className="text-[10px] text-[#71849e]">{s.timestamp}</span>
+                  Sign In / Sign Up
                 </button>
-              ))
-            ) : (
-              <p className="text-[11px] text-[#71849e] italic py-2">
-                No recent investigations. Enter an objective to begin.
-              </p>
-            )}
-          </div>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -488,7 +712,13 @@ export function Workspace({
               >
                 <option value="ALL_GRAPHS">All Graphs (Federated)</option>
                 {availableGraphs
-                  .filter((g) => g !== "ALL_GRAPHS" && g !== "fraud_demo")
+                  .filter(
+                    (g) =>
+                      g !== "ALL_GRAPHS" &&
+                      g !== "fraud_demo" &&
+                      !g.startsWith("graphos_auth") &&
+                      !g.startsWith("graphos_history")
+                  )
                   .map((g) => (
                     <option key={g} value={g}>
                       {g === "fraud_swiftpay"
@@ -517,6 +747,32 @@ export function Workspace({
               <span className="hidden sm:inline">Import</span>
             </button>
 
+            {/* User Profile Pill / Sign In Button */}
+            {user ? (
+              <div className="flex items-center gap-1.5 bg-[#f0f7ff] px-2.5 py-1.5 rounded-lg border border-[#1678ef]/20 text-xs font-semibold text-[#102f58]">
+                <span className="w-5 h-5 rounded-full bg-[#1678ef] text-white flex items-center justify-center text-[10px] font-bold">
+                  {user.name.charAt(0).toUpperCase()}
+                </span>
+                <span className="hidden lg:inline max-w-[90px] truncate">{user.name}</span>
+                <button
+                  onClick={handleLogout}
+                  className="text-[#1678ef] hover:text-blue-800 text-[11px] font-bold ml-1 cursor-pointer transition"
+                  title="Sign Out"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-[#0b2447] text-xs font-bold shadow-xs transition cursor-pointer"
+                title="First step: Sign in to run investigations"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Sign In Required</span>
+              </button>
+            )}
+
             {isInvestigating && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1678ef]/10 text-[#1678ef] text-xs font-semibold border border-[#1678ef]/20">
                 <span className="w-2 h-2 rounded-full bg-[#1678ef] animate-ping" />
@@ -528,7 +784,7 @@ export function Workspace({
 
         {/* Scrollable Conversation / Stream Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {!currentObjective && !currentResult && (
+          {!currentObjective && !currentResult && pastMessages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center py-12 px-4">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#1678ef]/15 to-[#38bdf8]/15 border border-[#1678ef]/25 flex items-center justify-center text-[#1678ef] mb-4 shadow-sm shadow-[#1678ef]/10">
                 <Sparkles className="w-7 h-7 text-[#1678ef]" />
@@ -593,8 +849,61 @@ export function Workspace({
             </div>
           )}
 
-          {/* User question bubble */}
-          {currentObjective && (
+          {/* Past Conversation Turns (Loaded from FalkorDB Chat History) */}
+          {pastMessages.length > 0 && (
+            <div className="space-y-6">
+              {pastMessages.map((msg) =>
+                msg.role === "user" ? (
+                  <div
+                    key={msg.id}
+                    className="flex items-start gap-3.5 p-4 sm:p-5 rounded-2xl bg-white border border-[#4370aa]/15 shadow-xs"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#1678ef] to-[#38bdf8] text-white flex items-center justify-center text-xs font-bold shadow-xs shrink-0">
+                      {user ? user.name.charAt(0).toUpperCase() : "You"}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#1678ef] bg-[#eff7ff] px-2 py-0.5 rounded-full border border-[#1678ef]/15">
+                          Investigation Objective
+                        </span>
+                        <span className="text-[10px] text-[#71849e]">
+                          {new Date(msg.timestamp * 1000).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                      <p className="text-sm sm:text-base font-semibold text-[#102f58] leading-relaxed">
+                        {msg.content}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    key={msg.id}
+                    className="p-6 rounded-3xl bg-white border border-[#1678ef]/30 shadow-md space-y-4"
+                  >
+                    <div className="flex items-center justify-between pb-3 border-b border-[#4370aa]/15">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                          <CheckCircle2 className="w-4 h-4" />
+                        </div>
+                        <span className="font-bold text-sm text-[#102f58]">
+                          Verified Grounded Findings
+                        </span>
+                      </div>
+                    </div>
+                    <div className="prose prose-slate max-w-none text-[#102f58] leading-relaxed">
+                      <FormattedMarkdown content={msg.content} />
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+          )}
+
+          {/* Current single active question bubble (when not loaded from pastMessages) */}
+          {pastMessages.length === 0 && currentObjective && (
             <div className="flex items-start gap-3.5 p-4 sm:p-5 rounded-2xl bg-white border border-[#4370aa]/15 shadow-xs">
               <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#1678ef] to-[#38bdf8] text-white flex items-center justify-center text-xs font-bold shadow-xs shrink-0">
                 You
@@ -813,6 +1122,27 @@ export function Workspace({
               </div>
             )}
 
+            {/* If not logged in, show clear warning that sign in is required */}
+            {!user && (
+              <div className="mb-2.5 p-3 rounded-2xl bg-amber-50/90 border border-amber-300 text-[#0b2447] text-xs flex items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-amber-400 text-[#0b2447] flex items-center justify-center shrink-0">
+                    <Lock className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <span className="font-bold">Sign In Required:</span> Please log in to run live AI investigations & save your chat history.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-[#0b2447] font-bold text-xs transition shadow-xs cursor-pointer shrink-0"
+                >
+                  Sign In
+                </button>
+              </div>
+            )}
+
             <form
               onSubmit={handleFormSubmit}
               className="relative flex items-center gap-2.5 p-2 sm:p-2.5 rounded-2xl bg-white border border-[#4370aa]/25 hover:border-[#1678ef]/50 focus-within:border-[#1678ef] focus-within:ring-4 focus-within:ring-[#1678ef]/10 shadow-lg shadow-slate-200/50 transition-all duration-200"
@@ -826,7 +1156,9 @@ export function Workspace({
                 value={queryInput}
                 onChange={(e) => setQueryInput(e.target.value)}
                 placeholder={
-                  isInvestigating
+                  !user
+                    ? "Sign in required to run investigations... Click Sign In above to begin."
+                    : isInvestigating
                     ? "Investigating across graph... Click Stop to halt or type follow-up..."
                     : "Ask GraphOS to explore connected entities, trace paths, or investigate..."
                 }
@@ -1119,6 +1451,13 @@ export function Workspace({
         onClose={() => setIsImportModalOpen(false)}
         onIngestSuccess={handleIngestSuccess}
         availableGraphs={availableGraphs}
+      />
+
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
       />
     </div>
   );

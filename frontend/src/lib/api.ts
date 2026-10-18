@@ -3,6 +3,9 @@ import {
   GraphSchemaProfile,
   InvestigationResult,
   InvestigationEvent,
+  User,
+  ConversationSummary,
+  ConversationDetail,
 } from "../types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -12,6 +15,7 @@ export async function getHealth(): Promise<HealthStatus | null> {
     const res = await fetch(`${API_BASE_URL}/api/health`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
     });
     if (!res.ok) return null;
     return await res.json();
@@ -22,7 +26,9 @@ export async function getHealth(): Promise<HealthStatus | null> {
 
 export async function getAvailableGraphs(): Promise<{ graphs: string[]; active_graph: string } | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/graphs`);
+    const res = await fetch(`${API_BASE_URL}/api/graphs`, {
+      credentials: "include",
+    });
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -38,6 +44,7 @@ export async function getSchema(tenantGraph?: string): Promise<GraphSchemaProfil
     const res = await fetch(url, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -52,7 +59,9 @@ export async function getGraphPreview(tenantGraph?: string): Promise<{ graph_nam
     const url = tenantGraph
       ? `${API_BASE_URL}/api/graph/preview?tenant_graph=${encodeURIComponent(tenantGraph)}`
       : `${API_BASE_URL}/api/graph/preview`;
-    const res = await fetch(url);
+    const res = await fetch(url, {
+      credentials: "include",
+    });
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -61,7 +70,9 @@ export async function getGraphPreview(tenantGraph?: string): Promise<{ graph_nam
 }
 
 export async function getDemoScenario(scenario: string): Promise<InvestigationResult> {
-  const res = await fetch(`${API_BASE_URL}/api/demo/${scenario}`);
+  const res = await fetch(`${API_BASE_URL}/api/demo/${scenario}`, {
+    credentials: "include",
+  });
   if (!res.ok) {
     throw new Error(`Failed to load scenario: ${res.statusText}`);
   }
@@ -73,14 +84,22 @@ export async function executeInvestigationStream(
   mode: "live" | "demo",
   onEvent: (event: InvestigationEvent) => void,
   tenantGraph?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  conversationId?: string,
+  onConversationAssigned?: (convId: string) => void
 ): Promise<InvestigationResult> {
   // Live SSE streaming directly from backend
   try {
     const res = await fetch(`${API_BASE_URL}/api/investigate/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ objective, mode: "live", tenant_graph: tenantGraph }),
+      credentials: "include",
+      body: JSON.stringify({
+        objective,
+        mode: "live",
+        tenant_graph: tenantGraph,
+        conversation_id: conversationId,
+      }),
       signal,
     });
 
@@ -119,6 +138,9 @@ export async function executeInvestigationStream(
           try {
             const ev: InvestigationEvent = JSON.parse(rawData);
             onEvent(ev);
+            if ((ev as any).type === "conversation_assigned" && ev.metadata?.conversation_id) {
+              onConversationAssigned?.(ev.metadata.conversation_id);
+            }
             if (ev.type === "complete" && ev.metadata) {
               finalResult = ev.metadata as InvestigationResult;
             }
@@ -157,22 +179,9 @@ export async function executeInvestigationStream(
       return finalResult;
     }
 
-    // Fallback sync request if complete event didn't bundle full object
-    const syncRes = await fetch(`${API_BASE_URL}/api/investigate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ objective, mode: "live", tenant_graph: tenantGraph || "ALL_GRAPHS" }),
-      signal,
-    });
-    return await syncRes.json();
+    throw new Error("Investigation stream ended without final synthesis result.");
   } catch (err: any) {
-    if (err?.name === "AbortError" || signal?.aborted) {
-      onEvent({
-        type: "error",
-        iteration: 0,
-        message: "Investigation stopped by user.",
-        timestamp: new Date().toISOString(),
-      });
+    if (signal?.aborted) {
       return {
         objective,
         success: false,
@@ -195,8 +204,7 @@ export async function executeInvestigationStream(
         duration_seconds: 0,
       };
     }
-
-    const errorMsg = err?.message || "Connection refused to backend API.";
+    const errorMsg = err?.message || "Unknown streaming error";
     onEvent({
       type: "error",
       iteration: 0,
@@ -234,6 +242,7 @@ export async function ingestCodeJson(
   const res = await fetch(`${API_BASE_URL}/api/ingest/code-json`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ graph_name: graphName, data }),
   });
   if (!res.ok) {
@@ -251,6 +260,7 @@ export async function ingestCsv(
   const res = await fetch(`${API_BASE_URL}/api/ingest/csv`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ graph_name: graphName, csv_text: csvText, domain }),
   });
   if (!res.ok) {
@@ -269,6 +279,7 @@ export async function approveRemediation(
   const res = await fetch(`${API_BASE_URL}/api/remediation/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({
       action_type: actionType,
       target_id: targetId,
@@ -280,6 +291,134 @@ export async function approveRemediation(
     throw new Error("Failed to approve remediation action");
   }
   return await res.json();
+}
+
+// ============================================================================
+// Authentication & User Session API Calls
+// ============================================================================
+
+export async function getMe(): Promise<User | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.authenticated && data.user ? data.user : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function signupUser(
+  name: string,
+  email: string,
+  password: string
+): Promise<{ user: User; session_token: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ name, email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Sign up failed" }));
+    throw new Error(err.detail || "Sign up failed");
+  }
+  return await res.json();
+}
+
+export async function loginUser(
+  email: string,
+  password?: string
+): Promise<{ user: User; session_token: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, password: password || undefined }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Login failed" }));
+    throw new Error(err.detail || "Account not found with this email. Please check your email or sign up.");
+  }
+  return await res.json();
+}
+
+export async function logoutUser(): Promise<void> {
+  await fetch(`${API_BASE_URL}/api/auth/logout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+  }).catch(() => {});
+}
+
+// ============================================================================
+// Persistent Chat History API Calls (FalkorDB `graphos_history`)
+// ============================================================================
+
+export async function getConversations(): Promise<ConversationSummary[]> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/conversations`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.conversations) ? data.conversations : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createConversation(
+  title: string = "New Investigation",
+  graphName: string = "ALL_GRAPHS"
+): Promise<ConversationSummary | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ title, graph_name: graphName }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.conversation || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getConversation(conversationId: string): Promise<ConversationDetail | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.conversation || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteConversation(conversationId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export const LOCAL_DEMO_FIXTURES: Record<string, InvestigationResult> = {};

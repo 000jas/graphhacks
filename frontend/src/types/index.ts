@@ -103,3 +103,37 @@ export interface HealthStatus {
   max_iterations: number;
   max_tool_calls: number;
 }
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  created_at?: number;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  graph_name: string;
+  created_at: number;
+  updated_at: number;
+  message_count?: number;
+}
+
+export interface ChatMessageRecord {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  metadata?: Record<string, any>;
+  timestamp: number;
+}
+
+export interface ConversationDetail {
+  id: string;
+  title: string;
+  graph_name: string;
+  created_at: number;
+  updated_at: number;
+  messages: ChatMessageRecord[];
+}

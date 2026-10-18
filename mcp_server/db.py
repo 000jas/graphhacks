@@ -10,7 +10,7 @@ from falkordb.graph import Graph
 try:
     from mcp_server.config import settings
 except ImportError:
-    from config import settings
+    from config import settings  # type: ignore[import-not-found,no-redef]
 
 logger = logging.getLogger("graphos.mcp.db")
 
@@ -25,6 +25,27 @@ class GraphNotFoundError(GraphError):
 
 class QueryExecutionError(GraphError):
     """Raised when a Cypher query fails execution."""
+
+
+SYSTEM_GRAPHS: set[str] = {
+    "graphos_auth",
+    "graphos_history",
+    "graphos_system",
+    "graphos_internal",
+    "graphos_memory",
+}
+
+
+def is_system_graph(graph_name: Optional[str]) -> bool:
+    """Return True if graph_name is a reserved internal system graph."""
+    if not graph_name:
+        return False
+    clean = graph_name.strip().lower()
+    if clean in SYSTEM_GRAPHS:
+        return True
+    if clean.startswith("graphos_auth") or clean.startswith("graphos_history"):
+        return True
+    return False
 
 
 @lru_cache(maxsize=1)
@@ -114,7 +135,7 @@ def execute_ro_query(
     if effective_name.strip().upper() in ("ALL_GRAPHS", "ALL"):
         client = get_db_client()
         avail = list_available_graphs()
-        target_graphs = [g for g in avail if g.upper() not in ("ALL_GRAPHS", "ALL", "FRAUD_DEMO")]
+        target_graphs = [g for g in avail if g.upper() not in ("ALL_GRAPHS", "ALL", "FRAUD_DEMO") and not is_system_graph(g)]
 
         # 1. Pure count aggregation (e.g., MATCH (n) RETURN count(n) AS node_count)
         q_norm = query.strip().upper().replace(" ", "").replace("\n", "")
@@ -177,7 +198,7 @@ def get_graph_stats(graph_name: Optional[str] = None) -> dict[str, Any]:
     """Return summary statistics for the active graph or all federated graphs."""
     if graph_name and graph_name.strip().upper() in ("ALL_GRAPHS", "ALL"):
         client = get_db_client()
-        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL")]
+        avail = [g for g in list_available_graphs() if g.upper() not in ("ALL_GRAPHS", "ALL") and not is_system_graph(g)]
         total_nodes = 0
         total_edges = 0
         kinds_set: set[str] = set()
@@ -233,12 +254,15 @@ def get_graph_stats(graph_name: Optional[str] = None) -> dict[str, Any]:
 
 
 def list_available_graphs() -> list[str]:
-    """Retrieve all available graph names from the FalkorDB instance dynamically."""
+    """Retrieve all available graph names from the FalkorDB instance dynamically, excluding internal system graphs."""
     client = get_db_client()
     try:
         raw = client.connection.execute_command("GRAPH.LIST")
-        return [g.decode("utf-8") if isinstance(g, bytes) else str(g) for g in raw]
+        graphs = [g.decode("utf-8") if isinstance(g, bytes) else str(g) for g in raw]
+        return [g for g in graphs if not is_system_graph(g)]
     except Exception as exc:
         logger.warning(f"Failed to list graphs: {exc}")
-        return [settings.default_graph]
+        safe_default = settings.default_graph if not is_system_graph(settings.default_graph) else "swiftpay_unified"
+        return [safe_default]
+
 

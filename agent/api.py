@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import replace
 from typing import Any, AsyncGenerator, Optional
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -19,6 +19,25 @@ from agent.mcp_client import MCPClientManager
 from agent.guardrails import GuardrailManager, READ_ONLY_ALLOWED_TOOLS
 from agent.session import SessionManager
 from agent.schema_context import SchemaContextManager
+from mcp_server.db import is_system_graph, list_available_graphs as mcp_list_available_graphs
+from agent.auth import (
+    signup_user,
+    login_user,
+    get_user_by_session,
+    revoke_session,
+    set_auth_cookie,
+    clear_auth_cookie,
+    extract_session_token,
+    get_current_user_optional,
+    get_current_user_required,
+)
+from agent.chat_history import (
+    create_conversation,
+    list_conversations,
+    get_conversation,
+    add_message,
+    delete_conversation,
+)
 
 logger = logging.getLogger("graphos.api")
 logging.basicConfig(level=logging.INFO)
@@ -29,10 +48,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS configuration to allow local development and Vercel/cloud deployments
+# CORS configuration supporting credentials (cookies) across local and cloud environments
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,6 +72,24 @@ class InvestigateRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Optional session identifier for multi-turn investigations")
     tenant_graph: Optional[str] = Field(None, description="Optional tenant graph name override")
     mode: Optional[str] = Field("live", description="Execution mode: 'live' or 'demo'")
+    conversation_id: Optional[str] = Field(None, description="Optional conversation ID for persistent chat history")
+
+
+class SignUpRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="Full display name")
+    email: str = Field(..., min_length=3, description="User email address")
+    password: str = Field(..., min_length=6, description="User password (min 6 chars)")
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, description="User email address")
+    password: Optional[str] = Field(None, description="Optional user password")
+
+
+class CreateConversationRequest(BaseModel):
+    title: Optional[str] = Field("New Investigation", description="Conversation title")
+    graph_name: Optional[str] = Field("ALL_GRAPHS", description="Associated graph database")
+
 
 
 DEMO_SCENARIOS: dict[str, Any] = {
@@ -363,12 +406,10 @@ async def health_check():
 
 
 @app.get("/api/graphs")
-async def list_available_graphs():
-    """List all available graph databases in FalkorDB Cloud."""
+async def list_available_graphs_endpoint(request: Request):
+    """List all available graph databases in FalkorDB Cloud (dynamically excluding internal system graphs)."""
     try:
-        from mcp_server.db import get_db_client
-        client = get_db_client()
-        raw_graphs = client.list_graphs()
+        raw_graphs = mcp_list_available_graphs()
         # Add ALL_GRAPHS at the top for cross-domain investigation
         graphs = ["ALL_GRAPHS"] + [g for g in raw_graphs if g != "ALL_GRAPHS"]
         active = settings.graph_name if settings.graph_name and settings.graph_name not in ("ALL_GRAPHS", "ALL") else "ALL_GRAPHS"
@@ -390,6 +431,12 @@ async def list_available_graphs():
 async def get_graph_schema(tenant_graph: Optional[str] = None, force_refresh: bool = False):
     """Retrieve runtime graph schema discovered through MCP."""
     target_graph = (tenant_graph or settings.graph_name or "ALL_GRAPHS").strip()
+    if is_system_graph(target_graph):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access to internal system graph '{target_graph}' is strictly prohibited."
+        )
+
     client = MCPClientManager(settings)
     try:
         await client.connect()
@@ -425,6 +472,11 @@ async def get_graph_schema(tenant_graph: Optional[str] = None, force_refresh: bo
 async def get_graph_preview(tenant_graph: Optional[str] = None, limit: int = 25):
     """Retrieve sample nodes and relationships from the active/selected graph for visual preview."""
     target_graph = (tenant_graph or settings.graph_name or "ALL_GRAPHS").strip()
+    if is_system_graph(target_graph):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access to internal system graph '{target_graph}' is strictly prohibited."
+        )
     try:
         from mcp_server.db import execute_ro_query, list_available_graphs, get_db_client
         entities: dict[str, Any] = {}
@@ -655,8 +707,14 @@ async def get_demo_scenario(scenario: str):
 
 
 @app.post("/api/investigate")
-async def run_investigation(req: InvestigateRequest):
+async def run_investigation(req: InvestigateRequest, request: Request):
     """Execute a complete graph investigation and return the full result synchronously against live FalkorDB."""
+    if req.tenant_graph and is_system_graph(req.tenant_graph):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access to internal system graph '{req.tenant_graph}' is strictly prohibited."
+        )
+
     if req.mode == "demo":
         s_key = "fraud" if ("fraud" in req.objective.lower() or "transaction" in req.objective.lower() or "suspicious" in req.objective.lower()) else "codebase"
         return DEMO_SCENARIOS.get(s_key, DEMO_SCENARIOS["fraud"])
@@ -674,11 +732,46 @@ async def run_investigation(req: InvestigateRequest):
 
 
 @app.post("/api/investigate/stream")
-async def stream_investigation(req: InvestigateRequest):
+async def stream_investigation(req: InvestigateRequest, request: Request):
     """
     Execute a real-time graph investigation with Server-Sent Events (SSE) against live FalkorDB.
     Streams agent thoughts, live MCP tool calls, real graph query results, and grounded findings.
+    Automatically persists conversation and messages when authenticated.
     """
+    if req.tenant_graph and is_system_graph(req.tenant_graph):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access to internal system graph '{req.tenant_graph}' is strictly prohibited."
+        )
+
+    user = get_current_user_optional(request)
+    conv_id = req.conversation_id
+
+    # If user is authenticated, ensure conversation exists and record user message
+    if user:
+        try:
+            if conv_id:
+                existing = get_conversation(conversation_id=conv_id, user_id=user["id"])
+                if not existing:
+                    conv_id = None
+            if not conv_id:
+                title = req.objective.strip()[:60] or "New Investigation"
+                new_conv = create_conversation(
+                    user_id=user["id"],
+                    title=title,
+                    graph_name=req.tenant_graph or "ALL_GRAPHS",
+                )
+                conv_id = new_conv["id"]
+
+            add_message(
+                conversation_id=conv_id,
+                role="user",
+                content=req.objective,
+                metadata={"tenant_graph": req.tenant_graph or "ALL_GRAPHS"},
+            )
+        except Exception as e_hist:
+            logger.warning(f"Failed to record user message in chat history: {e_hist}")
+
     async def event_generator() -> AsyncGenerator[str, None]:
         event_queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
 
@@ -694,6 +787,15 @@ async def stream_investigation(req: InvestigateRequest):
         # Live mode execution directly against FalkorDB via MCP
         async def run_task():
             try:
+                if conv_id:
+                    event_queue.put_nowait({
+                        "type": "conversation_assigned",
+                        "iteration": 0,
+                        "message": "Conversation tracking active",
+                        "metadata": {"conversation_id": conv_id},
+                        "timestamp": time.time(),
+                    })
+
                 if req.mode == "demo":
                     s_key = "fraud" if ("fraud" in req.objective.lower() or "transaction" in req.objective.lower() or "suspicious" in req.objective.lower()) else "codebase"
                     demo_data = DEMO_SCENARIOS.get(s_key, DEMO_SCENARIOS["fraud"])
@@ -710,7 +812,7 @@ async def stream_investigation(req: InvestigateRequest):
                         "type": "complete",
                         "iteration": len(demo_data.get("steps", [])),
                         "message": "Investigation completed successfully",
-                        "metadata": demo_data,
+                        "metadata": {**demo_data, "conversation_id": conv_id},
                     })
                     return
 
@@ -722,12 +824,36 @@ async def stream_investigation(req: InvestigateRequest):
                     objective=req.objective,
                     on_event_callback=on_event,
                 )
+                
+                result_dict = res.to_dict()
+                if conv_id:
+                    result_dict["conversation_id"] = conv_id
+
                 event_queue.put_nowait({
                     "type": "complete",
                     "iteration": res.total_iterations,
                     "message": "Investigation completed successfully",
-                    "metadata": res.to_dict(),
+                    "metadata": result_dict,
                 })
+
+                # Persist assistant response to FalkorDB chat history
+                if user and conv_id:
+                    try:
+                        add_message(
+                            conversation_id=conv_id,
+                            role="assistant",
+                            content=res.final_answer,
+                            metadata={
+                                "evidence_summary": res.evidence_summary,
+                                "total_iterations": res.total_iterations,
+                                "total_tool_calls": res.total_tool_calls,
+                                "duration_seconds": res.duration_seconds,
+                                "steps": [s.to_dict() for s in res.steps],
+                            },
+                        )
+                    except Exception as e_save:
+                        logger.warning(f"Error persisting assistant answer to chat history: {e_save}")
+
             except Exception as exc:
                 logger.error(f"Streaming investigation error: {exc}", exc_info=True)
                 event_queue.put_nowait({
@@ -781,6 +907,8 @@ class ApproveActionRequest(BaseModel):
 @app.post("/api/ingest/code-json")
 async def ingest_code_ast_json(req: IngestCodeJsonRequest) -> dict[str, Any]:
     """Ingest parsed code AST / JSON from CLI code parser into FalkorDB Cloud."""
+    if is_system_graph(req.graph_name):
+        raise HTTPException(status_code=403, detail=f"Cannot ingest into internal system graph '{req.graph_name}'.")
     try:
         from agent.ingest import ingest_code_json
         result = ingest_code_json(req.data, graph_name=req.graph_name)
@@ -794,6 +922,8 @@ async def ingest_code_ast_json(req: IngestCodeJsonRequest) -> dict[str, Any]:
 @app.post("/api/ingest/csv")
 async def ingest_csv_dataset(req: IngestCsvRequest) -> dict[str, Any]:
     """Ingest CSV records (fraud transactions, security alerts, general data) into FalkorDB."""
+    if is_system_graph(req.graph_name):
+        raise HTTPException(status_code=403, detail=f"Cannot ingest into internal system graph '{req.graph_name}'.")
     try:
         from agent.ingest import ingest_csv_data
         result = ingest_csv_data(req.csv_text, graph_name=req.graph_name, domain=req.domain)
@@ -808,6 +938,8 @@ async def ingest_csv_dataset(req: IngestCsvRequest) -> dict[str, Any]:
 async def approve_remediation_action(req: ApproveActionRequest) -> dict[str, Any]:
     """Approve and record durable remediation action into decision memory."""
     target_graph = req.tenant_graph or settings.graph_name
+    if target_graph and is_system_graph(target_graph):
+        raise HTTPException(status_code=403, detail=f"Cannot execute remediation on internal system graph '{target_graph}'.")
     try:
         from mcp_server.decision_memory import propose_action, execute_approved_action
         proposal = propose_action(
@@ -847,6 +979,112 @@ async def approve_remediation_action(req: ApproveActionRequest) -> dict[str, Any
             "message": f"Remediation action {req.action_type} on {req.target_id} approved and logged for audit.",
             "timestamp": time.time(),
         }
+
+
+# ============================================================================
+# User Authentication Endpoints (Backed by FalkorDB `graphos_auth` & Argon2)
+# ============================================================================
+
+@app.post("/api/auth/signup")
+async def auth_signup(req: SignUpRequest, response: Response):
+    """Register a new user in graphos_auth with secure Argon2 password hashing."""
+    try:
+        user, session_token = signup_user(name=req.name, email=req.email, password=req.password)
+        set_auth_cookie(response, session_token)
+        return {
+            "status": "success",
+            "user": user,
+            "session_token": session_token,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Sign up error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: LoginRequest, response: Response):
+    """Authenticate user with email and Argon2 hash comparison, creating a secure session."""
+    try:
+        user, session_token = login_user(email=req.email, password=req.password)
+        set_auth_cookie(response, session_token)
+        return {
+            "status": "success",
+            "user": user,
+            "session_token": session_token,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Login error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Authentication failed")
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    """Revoke session and clear session cookie."""
+    token = extract_session_token(request)
+    if token:
+        revoke_session(token)
+    clear_auth_cookie(response)
+    return {"status": "success", "message": "Logged out successfully"}
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Return currently authenticated user profile or null."""
+    user = get_current_user_optional(request)
+    return {
+        "authenticated": bool(user),
+        "user": user,
+    }
+
+
+# ============================================================================
+# Persistent Chat History Endpoints (Backed by FalkorDB `graphos_history`)
+# ============================================================================
+
+@app.get("/api/conversations")
+async def api_list_conversations(request: Request):
+    """List persistent conversations belonging to the authenticated user."""
+    user = get_current_user_optional(request)
+    if not user:
+        return {"conversations": []}
+    convs = list_conversations(user["id"])
+    return {"status": "success", "conversations": convs}
+
+
+@app.post("/api/conversations")
+async def api_create_conversation(req: CreateConversationRequest, request: Request):
+    """Create a new persistent conversation for the authenticated user."""
+    user = get_current_user_required(request)
+    conv = create_conversation(
+        user_id=user["id"],
+        title=req.title or "New Investigation",
+        graph_name=req.graph_name or "ALL_GRAPHS",
+    )
+    return {"status": "success", "conversation": conv}
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def api_get_conversation(conversation_id: str, request: Request):
+    """Retrieve conversation and its full message history. Enforces strict user isolation."""
+    user = get_current_user_required(request)
+    conv = get_conversation(conversation_id=conversation_id, user_id=user["id"])
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found or access forbidden.")
+    return {"status": "success", "conversation": conv}
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def api_delete_conversation(conversation_id: str, request: Request):
+    """Delete a conversation belonging to the authenticated user."""
+    user = get_current_user_required(request)
+    success = delete_conversation(conversation_id=conversation_id, user_id=user["id"])
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found or access forbidden.")
+    return {"status": "success", "message": "Conversation deleted"}
 
 
 

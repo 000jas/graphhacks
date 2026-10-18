@@ -4,8 +4,9 @@ import React, { useState, useEffect } from "react";
 import { Hero } from "../components/Hero";
 import { Workspace } from "../components/Workspace";
 import { ImportDatasetModal } from "../components/ImportDatasetModal";
-import { HealthStatus, GraphSchemaProfile } from "../types";
-import { getHealth, getSchema, getAvailableGraphs } from "../lib/api";
+import { HealthStatus, GraphSchemaProfile, User } from "../types";
+import { getHealth, getSchema, getAvailableGraphs, getMe, logoutUser } from "../lib/api";
+import { AuthModal } from "../components/AuthModal";
 import {
   Database,
   Network,
@@ -28,9 +29,14 @@ export default function Home() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [schemaProfile, setSchemaProfile] = useState<GraphSchemaProfile | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [availableGraphs, setAvailableGraphs] = useState<string[]>(["ALL_GRAPHS"]);
 
   useEffect(() => {
+    getMe().then((u) => {
+      if (u) setUser(u);
+    });
     getHealth().then((h) => {
       setHealth(h);
     });
@@ -49,10 +55,18 @@ export default function Home() {
 
   const handleStartInvestigation = (query: string) => {
     setActiveQuery(query);
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     setView("workspace");
   };
 
   const handleOpenWorkspace = () => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     setActiveQuery("");
     setView("workspace");
   };
@@ -69,10 +83,14 @@ export default function Home() {
       }
     });
     setIsImportModalOpen(false);
-    setView("workspace");
+    if (!user) {
+      setIsAuthModalOpen(true);
+    } else {
+      setView("workspace");
+    }
   };
 
-  if (view === "workspace") {
+  if (view === "workspace" && user) {
     return (
       <Workspace
         initialQuery={activeQuery}
@@ -128,21 +146,52 @@ export default function Home() {
               <span className="md:hidden">Live MCP</span>
             </div>
 
+            {user ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/10 border border-white/20 text-white backdrop-blur-md">
+                <span className="w-5 h-5 rounded-full bg-[#38bdf8] text-[#102f58] flex items-center justify-center text-[10px] font-bold">
+                  {user.name.charAt(0).toUpperCase()}
+                </span>
+                <span className="max-w-[100px] truncate hidden md:inline">{user.name}</span>
+                <button
+                  onClick={async () => {
+                    await logoutUser();
+                    setUser(null);
+                  }}
+                  className="text-[#38bdf8] hover:text-white text-[11px] font-bold ml-1 cursor-pointer transition"
+                  title="Log Out"
+                >
+                  Log Out
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold bg-amber-400 text-[#0b2447] hover:bg-amber-300 transition shadow-sm shadow-amber-950/20 cursor-pointer"
+                title="First step: Sign in to launch investigations"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Sign In</span>
+              </button>
+            )}
+
             <button
               onClick={handleOpenWorkspace}
               className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-[#1678ef] to-[#0ea5e9] hover:brightness-110 shadow-md shadow-blue-500/30 transition transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer"
             >
-              <span>Launch Chatbot</span>
+              {!user && <Lock className="w-3.5 h-3.5 text-amber-300" />}
+              <span>{user ? "Launch Chatbot" : "Sign In to Launch"}</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
         </header>
 
-        {/* Clean, attractive product hero without raw chatbox */}
+        {/* Clean, attractive product hero with login requirement clarity */}
         <Hero
+          user={user}
           onStartInvestigation={handleStartInvestigation}
           onOpenWorkspace={handleOpenWorkspace}
           onOpenImport={() => setIsImportModalOpen(true)}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
           mode="live"
         />
 
@@ -339,6 +388,16 @@ export default function Home() {
         onClose={() => setIsImportModalOpen(false)}
         onIngestSuccess={handleIngestSuccess}
         availableGraphs={availableGraphs}
+      />
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={(loggedInUser) => {
+          setUser(loggedInUser);
+          setIsAuthModalOpen(false);
+          setView("workspace");
+        }}
       />
 
       {/* Clean footer */}

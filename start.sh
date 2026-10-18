@@ -27,7 +27,7 @@ trap cleanup SIGINT SIGTERM EXIT
 
 echo "🚀 Starting GraphOS Backend (FastAPI on port 8000)..."
 source .venv/bin/activate
-uvicorn agent.api:app --host 0.0.0.0 --port 8000 &
+uvicorn agent.api:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 
 # Wait for backend to be ready
