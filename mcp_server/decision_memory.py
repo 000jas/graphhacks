@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import json
 import uuid
 from typing import Any, Optional
 
@@ -38,10 +37,12 @@ def propose_action(
 
     simulation = simulate_candidate_action(action, target_id, params=params, graph_name=graph_name)
     policy_allowed = simulation.get("policy_evaluation", {}).get("allowed", False)
+    risk_level = simulation.get("risk_assessment", {}).get("risk_level", "MEDIUM")
 
     proposal_id = f"prop-{uuid.uuid4().hex[:10]}"
     approval_token = f"token-apprv-{uuid.uuid4().hex[:8]}" if policy_allowed else "BLOCKED_BY_POLICY"
     created_at = utc_now()
+    params_json = json.dumps(params)
 
     query = """
     MERGE (p:Entity {id: $id})
@@ -52,6 +53,8 @@ def propose_action(
         p.target_id = $target_id,
         p.rationale = $rationale,
         p.status = $status,
+        p.risk_level = $risk_level,
+        p.params = $params_json,
         p.approval_token = $approval_token,
         p.created_at = $created_at,
         p.source_ref = $source_ref
@@ -65,6 +68,8 @@ def propose_action(
             "target_id": target_id,
             "rationale": rationale,
             "status": "APPROVED_PENDING_EXECUTION" if policy_allowed else "REJECTED_BY_POLICY",
+            "risk_level": risk_level,
+            "params_json": params_json,
             "approval_token": approval_token,
             "created_at": created_at,
             "source_ref": f"graphos:proposal:{proposal_id}",
@@ -109,15 +114,134 @@ def propose_action(
         "target_id": target_id,
         "rationale": rationale,
         "status": "APPROVED_PENDING_EXECUTION" if policy_allowed else "REJECTED_BY_POLICY",
+        "risk_level": risk_level,
         "approval_token": approval_token,
+        "params": params,
         "required_evidence_count": len(evidence_ids),
         "policy_allowed": policy_allowed,
         "simulation_summary": simulation.get("counterfactual_verdict", ""),
+        "blast_radius": simulation.get("blast_radius_summary", {}),
         "execution_instruction": (
             f"To execute this approved action, invoke 'execute_approved_action' with proposal_id='{proposal_id}' and approval_token='{approval_token}'."
             if policy_allowed
             else "Action cannot be executed because policy checks failed. Revise the proposal or resolve dependencies."
         ),
+    }
+
+
+def validate_action_outcome(
+    action: str,
+    target_id: str,
+    params: Optional[dict[str, Any]] = None,
+    expected_changes: Optional[list[dict[str, Any]]] = None,
+    graph_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Verify the ground-truth outcome of an action by directly inspecting graph state in FalkorDB.
+    Never claims success unless confirmed by actual post-state read queries.
+    """
+    target_id = target_id.strip()
+    params = params or {}
+    expected_changes = expected_changes or []
+
+    rows = execute_ro_query(
+        "MATCH (t {id: $id}) RETURN t.id, coalesce(t.status, ''), properties(t), labels(t)",
+        params={"id": target_id},
+        graph_name=graph_name,
+    )
+    if not rows:
+        return {
+            "validated": False,
+            "target_id": target_id,
+            "error": f"Target entity '{target_id}' not found in graph post-execution.",
+            "discrepancies": [f"Target node '{target_id}' missing in graph"],
+            "actual_state": {},
+            "verified_properties": [],
+            "verified_at": utc_now(),
+        }
+
+    t_id, t_status, t_props, t_labels = rows[0]
+    actual_state = {
+        "id": t_id,
+        "status": t_status,
+        "labels": t_labels,
+        "properties": t_props,
+    }
+
+    verified_properties = []
+    discrepancies = []
+
+    act_upper = action.upper().replace("-", "_").replace(" ", "_")
+
+    # 1. Infer expected status if status change was requested
+    expected_status = params.get("new_status") or params.get("status")
+    if not expected_status:
+        if act_upper in {"QUARANTINE_NODE", "ISOLATE_HOST", "QUARANTINE", "FREEZE_ACCOUNT", "BLOCK_IP"}:
+            expected_status = "quarantined"
+        elif act_upper in {"REVOKE_ACCESS"}:
+            expected_status = "revoked"
+        elif act_upper in {"APPLY_SECURITY_PATCH", "REMEDIATE_VULNERABILITY"}:
+            expected_status = "mitigated"
+        elif act_upper in {"MERGE_DUPLICATES"}:
+            expected_status = "merged_inactive"
+        elif act_upper in {"REASSIGN_REVIEW", "REASSIGN_TASK"}:
+            expected_status = "in_progress"
+
+    if expected_status:
+        curr_status = str(t_props.get("status", t_status)).lower()
+        if curr_status == expected_status.lower():
+            verified_properties.append(f"status={expected_status}")
+        else:
+            discrepancies.append(f"Expected status='{expected_status}', found status='{curr_status}'")
+
+    # 2. Dynamic property check
+    p_name = params.get("property_name") or params.get("property")
+    expected_val = params.get("new_value", params.get("value"))
+    if p_name is not None and expected_val is not None:
+        actual_val = t_props.get(p_name)
+        if str(actual_val) == str(expected_val):
+            verified_properties.append(f"{p_name}={expected_val}")
+        else:
+            discrepancies.append(f"Expected {p_name}='{expected_val}', found '{actual_val}'")
+
+    # 3. Dynamic relationship checks
+    if act_upper in {"ADD_RELATIONSHIP", "MERGE_DUPLICATES"} or ("related_entity_id" in params and act_upper not in {"REMOVE_RELATIONSHIP", "REVOKE_ACCESS"}):
+        rel_type = params.get("rel_type") or ("MERGED_INTO" if act_upper == "MERGE_DUPLICATES" else None)
+        rel_target = params.get("related_entity_id") or params.get("canonical_id")
+        if rel_type and rel_target:
+            edge_rows = execute_ro_query(
+                "MATCH (t {id: $tid})-[r]->(dest {id: $did}) WHERE type(r) = $rel RETURN type(r)",
+                params={"tid": target_id, "did": rel_target, "rel": rel_type},
+                graph_name=graph_name,
+            )
+            if edge_rows:
+                verified_properties.append(f"relationship:{rel_type}->{rel_target}")
+            else:
+                discrepancies.append(f"Expected edge -[:{rel_type}]->({rel_target}) not found")
+
+    if act_upper in {"REMOVE_RELATIONSHIP", "REVOKE_ACCESS"}:
+        rel_type = params.get("rel_type") or params.get("relationship")
+        rel_target = params.get("related_entity_id") or params.get("role_id")
+        if rel_type and rel_target and rel_target != "all_associated":
+            edge_rows = execute_ro_query(
+                "MATCH (t {id: $tid})-[r]->(dest {id: $did}) WHERE type(r) = $rel RETURN type(r)",
+                params={"tid": target_id, "did": rel_target, "rel": rel_type},
+                graph_name=graph_name,
+            )
+            if not edge_rows:
+                verified_properties.append(f"relationship_removed:{rel_type}->{rel_target}")
+            else:
+                discrepancies.append(f"Expected edge -[:{rel_type}]->({rel_target}) to be deleted, but it still exists")
+
+    validated = (len(discrepancies) == 0) and (len(verified_properties) > 0 or t_props.get("updated_at") is not None)
+
+    return {
+        "validated": validated,
+        "target_id": target_id,
+        "actual_state": actual_state,
+        "verified_properties": verified_properties,
+        "discrepancies": discrepancies,
+        "verified_at": utc_now(),
     }
 
 
@@ -127,7 +251,8 @@ def execute_approved_action(
     graph_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    Execute a formally approved action with token authorization, idempotent mutation, and audit logging.
+    Execute a formally approved action with token authorization, schema-aware mutation,
+    strict post-execution ground-truth validation, and permanent audit logging.
     """
     proposal_id = proposal_id.strip()
     approval_token = approval_token.strip()
@@ -148,6 +273,7 @@ def execute_approved_action(
     if not rows:
         return {
             "executed": False,
+            "validated": False,
             "proposal_id": proposal_id,
             "status": "NOT_FOUND",
             "message": f"Action proposal '{proposal_id}' was not found in graph.",
@@ -158,6 +284,7 @@ def execute_approved_action(
     if p_token != approval_token or approval_token == "BLOCKED_BY_POLICY":
         return {
             "executed": False,
+            "validated": False,
             "proposal_id": proposal_id,
             "status": "UNAUTHORIZED",
             "message": "Invalid, forged, or policy-blocked approval token. Execution aborted.",
@@ -166,31 +293,62 @@ def execute_approved_action(
     if p_status == "EXECUTED":
         return {
             "executed": True,
+            "validated": True,
             "proposal_id": proposal_id,
             "status": "ALREADY_EXECUTED",
             "message": "This proposal was already executed. Idempotent check satisfied without duplicate operations.",
             "executed_at": p_props.get("executed_at", ""),
         }
 
+    # Extract stored parameters if available
+    params: dict[str, Any] = {}
+    if p_props.get("params"):
+        try:
+            params = json.loads(p_props["params"])
+        except Exception:
+            params = {}
+
     applied_changes = []
     executed_at = utc_now()
     exec_id = f"exec-{uuid.uuid4().hex[:10]}"
+    act_upper = p_action.upper().replace("-", "_").replace(" ", "_")
 
-    if p_action == "reassign_review":
+    # 1. Execute schema-aware mutation
+    if act_upper in {"REASSIGN_REVIEW", "REASSIGN_TASK"}:
+        assignee_id = params.get("assignee_id", "")
         execute_rw_query(
             """
-            MATCH (t:Entity {id: $task_id})
+            MATCH (t {id: $task_id})
             SET t.status = 'in_progress', t.updated_at = $ts
             """,
             params={"task_id": p_target, "ts": executed_at},
             graph_name=graph_name,
         )
         applied_changes.append({"entity": p_target, "property": "status", "new_value": "in_progress"})
+        if assignee_id:
+            execute_rw_query(
+                """
+                MATCH (t {id: $task_id})-[r:ASSIGNED_TO]->()
+                DELETE r
+                """,
+                params={"task_id": p_target},
+                graph_name=graph_name,
+            )
+            execute_rw_query(
+                """
+                MATCH (t {id: $task_id})
+                MATCH (p {id: $assignee_id})
+                MERGE (t)-[:ASSIGNED_TO {observed_at: $ts}]->(p)
+                """,
+                params={"task_id": p_target, "assignee_id": assignee_id, "ts": executed_at},
+                graph_name=graph_name,
+            )
+            applied_changes.append({"entity": p_target, "relationship": "ASSIGNED_TO", "new_target": assignee_id})
 
-    elif p_action == "approve_production_release":
+    elif act_upper == "APPROVE_PRODUCTION_RELEASE":
         execute_rw_query(
             """
-            MATCH (r:Entity {id: $release_id})
+            MATCH (r {id: $release_id})
             SET r.status = 'approved', r.updated_at = $ts
             """,
             params={"release_id": p_target, "ts": executed_at},
@@ -198,26 +356,194 @@ def execute_approved_action(
         )
         applied_changes.append({"entity": p_target, "property": "status", "new_value": "approved"})
 
-    elif p_action.upper() in {"QUARANTINE_NODE", "FREEZE_ACCOUNT", "REVOKE_ACCESS", "BLOCK_IP", "ISOLATE_HOST"}:
+    elif act_upper in {"QUARANTINE_NODE", "FREEZE_ACCOUNT", "ISOLATE_HOST", "BLOCK_IP", "QUARANTINE"}:
+        target_status = params.get("new_status") or "quarantined"
         execute_rw_query(
             """
             MATCH (t {id: $target_id})
-            SET t.status = 'quarantined', t.updated_at = $ts
+            SET t.status = $status_val, t.updated_at = $ts
+            """,
+            params={"target_id": p_target, "status_val": target_status, "ts": executed_at},
+            graph_name=graph_name,
+        )
+        applied_changes.append({"entity": p_target, "property": "status", "new_value": target_status})
+
+    elif act_upper in {"REVOKE_ACCESS", "REMOVE_RELATIONSHIP"}:
+        rel_type = params.get("rel_type") or params.get("relationship") or "ACCESSES"
+        rel_target = params.get("related_entity_id") or params.get("role_id")
+        if rel_target and rel_target != "all_associated":
+            execute_rw_query(
+                f"""
+                MATCH (t {{id: $target_id}})-[r:{rel_type}]->(dest {{id: $rel_target}})
+                DELETE r
+                """,
+                params={"target_id": p_target, "rel_target": rel_target},
+                graph_name=graph_name,
+            )
+            applied_changes.append({"entity": p_target, "removed_relationship": rel_type, "target": rel_target})
+        else:
+            execute_rw_query(
+                f"""
+                MATCH (t {{id: $target_id}})-[r:{rel_type}]->()
+                DELETE r
+                """,
+                params={"target_id": p_target},
+                graph_name=graph_name,
+            )
+            applied_changes.append({"entity": p_target, "removed_relationship": rel_type})
+
+        # Update target status to revoked if appropriate
+        execute_rw_query(
+            """
+            MATCH (t {id: $target_id})
+            SET t.status = coalesce(t.status, 'revoked'), t.updated_at = $ts
             """,
             params={"target_id": p_target, "ts": executed_at},
             graph_name=graph_name,
         )
-        applied_changes.append({"entity": p_target, "property": "status", "new_value": "quarantined"})
+
+    elif act_upper in {"MERGE_DUPLICATES", "MERGE_ENTITIES"}:
+        canonical_id = params.get("canonical_id") or params.get("target_id_primary")
+        if canonical_id:
+            execute_rw_query(
+                """
+                MATCH (dup {id: $dup_id})
+                MATCH (can {id: $can_id})
+                MERGE (dup)-[:MERGED_INTO {observed_at: $ts}]->(can)
+                SET dup.status = 'merged_inactive', dup.updated_at = $ts
+                """,
+                params={"dup_id": p_target, "can_id": canonical_id, "ts": executed_at},
+                graph_name=graph_name,
+            )
+            applied_changes.append({"entity": p_target, "merged_into": canonical_id, "status": "merged_inactive"})
+
+    elif act_upper in {"UPDATE_PROPERTY", "SET_PROPERTY"}:
+        prop_name = params.get("property_name") or params.get("property") or "status"
+        new_val = params.get("new_value", params.get("value"))
+        execute_rw_query(
+            f"""
+            MATCH (t {{id: $target_id}})
+            SET t.{prop_name} = $val, t.updated_at = $ts
+            """,
+            params={"target_id": p_target, "val": new_val, "ts": executed_at},
+            graph_name=graph_name,
+        )
+        applied_changes.append({"entity": p_target, "property": prop_name, "new_value": new_val})
+
+    elif act_upper in {"UPDATE_STATUS", "SET_STATUS"}:
+        new_status = params.get("new_status") or params.get("status") or "updated"
+        execute_rw_query(
+            """
+            MATCH (t {id: $target_id})
+            SET t.status = $status_val, t.updated_at = $ts
+            """,
+            params={"target_id": p_target, "status_val": new_status, "ts": executed_at},
+            graph_name=graph_name,
+        )
+        applied_changes.append({"entity": p_target, "property": "status", "new_value": new_status})
+
+    elif act_upper in {"APPLY_SECURITY_PATCH", "REMEDIATE_VULNERABILITY"}:
+        execute_rw_query(
+            """
+            MATCH (t {id: $target_id})
+            SET t.status = 'mitigated', t.updated_at = $ts
+            """,
+            params={"target_id": p_target, "ts": executed_at},
+            graph_name=graph_name,
+        )
+        applied_changes.append({"entity": p_target, "property": "status", "new_value": "mitigated"})
 
     else:
+        execute_rw_query(
+            """
+            MATCH (t {id: $target_id})
+            SET t.updated_at = $ts
+            """,
+            params={"target_id": p_target, "ts": executed_at},
+            graph_name=graph_name,
+        )
         applied_changes.append({"entity": p_target, "operation": p_action, "status": "applied"})
 
+    # 2. Strict Post-Execution Ground-Truth Validation
+    validation = validate_action_outcome(
+        action=p_action,
+        target_id=p_target,
+        params=params,
+        expected_changes=applied_changes,
+        graph_name=graph_name,
+    )
+
+    if not validation.get("validated", False):
+        # Validation FAILED: Mark proposal FAILED and record audit log without claiming success
+        execute_rw_query(
+            """
+            MATCH (p:Entity {id: $id})
+            SET p.status = 'FAILED_VALIDATION',
+                p.executed_at = $ts,
+                p.execution_id = $exec_id,
+                p.post_state_verified = false,
+                p.validation_discrepancies = $discrepancies
+            """,
+            params={
+                "id": proposal_id,
+                "ts": executed_at,
+                "exec_id": exec_id,
+                "discrepancies": json.dumps(validation.get("discrepancies", [])),
+            },
+            graph_name=graph_name,
+        )
+
+        execute_rw_query(
+            """
+            MERGE (a:Entity {id: $audit_id})
+            SET a:AuditRecord
+            SET a.name = $audit_name,
+                a.kind = 'AuditRecord',
+                a.execution_id = $exec_id,
+                a.proposal_id = $prop_id,
+                a.action = $action,
+                a.target_id = $target_id,
+                a.executed_at = $ts,
+                a.status = 'FAILED_VALIDATION',
+                a.validation_verified = false,
+                a.discrepancies = $discrepancies
+            """,
+            params={
+                "audit_id": f"audit-{exec_id}",
+                "audit_name": f"Audit Log (FAILED VALIDATION): {p_action} on {p_target}",
+                "exec_id": exec_id,
+                "prop_id": proposal_id,
+                "action": p_action,
+                "target_id": p_target,
+                "ts": executed_at,
+                "discrepancies": json.dumps(validation.get("discrepancies", [])),
+            },
+            graph_name=graph_name,
+        )
+
+        return {
+            "executed": False,
+            "validated": False,
+            "execution_id": exec_id,
+            "proposal_id": proposal_id,
+            "action": p_action,
+            "target_id": p_target,
+            "status": "FAILED_VALIDATION",
+            "executed_at": executed_at,
+            "applied_changes": applied_changes,
+            "validation": validation,
+            "audit_trail_id": f"audit-{exec_id}",
+            "message": f"Action '{p_action}' mutation failed post-execution verification on '{p_target}'. Success cannot be claimed.",
+        }
+
+    # 3. Validation PASSED: Persist success and create permanent verified AuditRecord
     execute_rw_query(
         """
         MATCH (p:Entity {id: $id})
         SET p.status = 'EXECUTED',
             p.executed_at = $ts,
-            p.execution_id = $exec_id
+            p.execution_id = $exec_id,
+            p.post_state_verified = true
         """,
         params={"id": proposal_id, "ts": executed_at, "exec_id": exec_id},
         graph_name=graph_name,
@@ -234,7 +560,9 @@ def execute_approved_action(
             a.action = $action,
             a.target_id = $target_id,
             a.executed_at = $ts,
-            a.status = 'SUCCESS'
+            a.status = 'SUCCESS',
+            a.validation_verified = true,
+            a.verified_properties = $verified_props
         """,
         params={
             "audit_id": f"audit-{exec_id}",
@@ -244,12 +572,14 @@ def execute_approved_action(
             "action": p_action,
             "target_id": p_target,
             "ts": executed_at,
+            "verified_props": json.dumps(validation.get("verified_properties", [])),
         },
         graph_name=graph_name,
     )
 
     return {
         "executed": True,
+        "validated": True,
         "execution_id": exec_id,
         "proposal_id": proposal_id,
         "action": p_action,
@@ -257,8 +587,59 @@ def execute_approved_action(
         "status": "SUCCESS",
         "executed_at": executed_at,
         "applied_changes": applied_changes,
+        "validation": validation,
         "audit_trail_id": f"audit-{exec_id}",
-        "message": f"Action '{p_action}' executed successfully on '{p_target}'. Audit log created.",
+        "message": f"Action '{p_action}' executed and verified against graph state on '{p_target}'. Audit log created.",
+    }
+
+
+def get_action_audit_trail(
+    proposal_id: str = "",
+    target_id: str = "",
+    limit: int = 20,
+    graph_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Retrieve durable, verified audit records from FalkorDB.
+    """
+    limit = max(1, min(limit, 50))
+    where_clauses = ["a.kind = 'AuditRecord'"]
+    params: dict[str, Any] = {}
+
+    if proposal_id.strip():
+        where_clauses.append("a.proposal_id = $proposal_id")
+        params["proposal_id"] = proposal_id.strip()
+
+    if target_id.strip():
+        where_clauses.append("a.target_id = $target_id")
+        params["target_id"] = target_id.strip()
+
+    cypher = f"""
+    MATCH (a:Entity)
+    WHERE {' AND '.join(where_clauses)}
+    RETURN a.id, a.name, a.execution_id, a.proposal_id, a.action, a.target_id, a.executed_at, a.status, properties(a)
+    ORDER BY a.executed_at DESC
+    LIMIT {limit}
+    """
+    rows = execute_ro_query(cypher, params=params, graph_name=graph_name)
+    records = [
+        {
+            "id": r[0],
+            "name": r[1],
+            "execution_id": r[2],
+            "proposal_id": r[3],
+            "action": r[4],
+            "target_id": r[5],
+            "executed_at": r[6],
+            "status": r[7],
+            "properties": r[8],
+        }
+        for r in rows
+    ]
+    return {
+        "count": len(records),
+        "records": records,
+        "tenant_graph": graph_name or "default",
     }
 
 

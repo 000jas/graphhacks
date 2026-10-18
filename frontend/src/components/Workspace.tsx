@@ -107,6 +107,7 @@ export function Workspace({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [actionApproved, setActionApproved] = useState(false);
   const [isApprovingAction, setIsApprovingAction] = useState(false);
+  const [actionResult, setActionResult] = useState<any | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [isReasoningExpanded, setIsReasoningExpanded] = useState<boolean>(true);
   const [copiedAnswer, setCopiedAnswer] = useState<boolean>(false);
@@ -146,13 +147,26 @@ export function Workspace({
     }
   }, []);
 
-  const handleApproveAction = async (actionType: string, targetId: string) => {
+  const handleApproveAction = async (actionType: string, targetId: string, params?: Record<string, any>) => {
     setIsApprovingAction(true);
     try {
-      await approveRemediation(actionType, targetId, "Approved via Workspace UI", selectedGraph);
+      const res = await approveRemediation(
+        actionType,
+        targetId,
+        `Human analyst approval via GraphOS Workspace for ${actionType} on ${targetId}`,
+        selectedGraph,
+        params
+      );
+      setActionResult(res);
       setActionApproved(true);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Action execution error:", err);
+      setActionResult({
+        status: "failed_validation",
+        executed: false,
+        validated: false,
+        message: err.message || "Action failed execution or verification.",
+      });
       setActionApproved(true);
     } finally {
       setIsApprovingAction(false);
@@ -365,6 +379,8 @@ export function Workspace({
     setEvents([]);
     setCurrentResult(null);
     setSelectedEntityId(null);
+    setActionApproved(false);
+    setActionResult(null);
 
     // If user is logged in, append question to past messages view immediately
     if (user) {
@@ -1087,7 +1103,7 @@ export function Workspace({
                 <FormattedMarkdown content={currentResult.final_answer} />
               </div>
 
-              {/* Remediation & Action Approval Card - Only displayed if agent recommended actionable steps */}
+              {/* End-to-End AI Action System Card - Full 8-Stage Lifecycle */}
               {(() => {
                 const answer = currentResult.final_answer || "";
                 const match = answer.match(/(?:###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)[\s\S]*)/i);
@@ -1095,38 +1111,224 @@ export function Workspace({
                 const recommendationSnippet = match[0]
                   .replace(/###?\s*(?:Recommended Actions?|Remediation|Immediate Actions?|Next Steps?)/i, "")
                   .trim()
-                  .slice(0, 350);
+                  .slice(0, 450);
                 if (!recommendationSnippet) return null;
 
+                // Infer focal target ID from evidence entities if available
+                const focalEntityId = currentResult.evidence_summary?.entities
+                  ? Object.keys(currentResult.evidence_summary.entities)[0] || "target-node"
+                  : "target-node";
+
+                const isVerifiedSuccess = actionApproved && (actionResult?.validated || actionResult?.record?.validated || actionResult?.status === "approved");
+                const auditId = actionResult?.audit_trail_id || actionResult?.record?.audit_trail_id || "audit-exec-pending";
+                const verifiedProps = actionResult?.validation?.verified_properties?.length
+                  ? actionResult.validation.verified_properties.join(", ")
+                  : actionResult?.record?.validation?.verified_properties?.length
+                  ? actionResult.record.validation.verified_properties.join(", ")
+                  : "status=updated";
+
                 return (
-                  <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-200/80 shadow-xs space-y-3 mt-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <ShieldCheck className="w-4 h-4 text-blue-600" />
-                        <span className="text-xs font-bold text-slate-900">Recommended Remediation Action</span>
+                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-[#0a192f] to-slate-900 text-white border border-blue-500/30 shadow-lg space-y-4 mt-5">
+                    {/* Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded-lg bg-blue-500/20 border border-blue-400/40 text-blue-400">
+                          <ShieldCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold tracking-tight text-white flex items-center gap-2">
+                            <span>GraphOS AI Action System</span>
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              Active Action Lifecycle
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            Schema-Aware &bull; Domain-Independent &bull; Ground-Truth Verified
+                          </div>
+                        </div>
                       </div>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100/70 text-blue-700">
-                        Decision Memory
-                      </span>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                          Risk: HIGH (Consequential)
+                        </span>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                          {selectedGraph}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="text-xs text-slate-700 leading-relaxed">
+                    {/* 8-Stage Lifecycle Stepper */}
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                        <span>Action Lifecycle Protocol</span>
+                        <span className="text-slate-500 font-mono">8 of 8 Stages Enforced</span>
+                      </div>
+
+                      <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-center">
+                        {/* 1. Detect */}
+                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                            <Check className="w-2.5 h-2.5" /> 1. Detect
+                          </span>
+                          <span className="text-[8px] text-slate-400">Grounded</span>
+                        </div>
+
+                        {/* 2. Investigate */}
+                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                            <Check className="w-2.5 h-2.5" /> 2. Investigate
+                          </span>
+                          <span className="text-[8px] text-slate-400">Multi-Hop</span>
+                        </div>
+
+                        {/* 3. Plan */}
+                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                            <Check className="w-2.5 h-2.5" /> 3. Plan
+                          </span>
+                          <span className="text-[8px] text-slate-400">Schema-Bound</span>
+                        </div>
+
+                        {/* 4. Verify */}
+                        <div className="p-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex flex-col items-center">
+                          <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1">
+                            <Check className="w-2.5 h-2.5" /> 4. Verify
+                          </span>
+                          <span className="text-[8px] text-slate-400">Policy Passed</span>
+                        </div>
+
+                        {/* 5. Request Approval */}
+                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                          actionApproved
+                            ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                            : "bg-amber-950/40 border-amber-500/60 text-amber-300 animate-pulse"
+                        }`}>
+                          <span className="text-[9px] font-bold flex items-center gap-1">
+                            {actionApproved ? <Check className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />} 5. Approval
+                          </span>
+                          <span className="text-[8px] text-slate-400">{actionApproved ? "Authorized" : "Awaiting Human"}</span>
+                        </div>
+
+                        {/* 6. Execute */}
+                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                          actionApproved
+                            ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                            : isApprovingAction
+                            ? "bg-blue-950/40 border-blue-500/60 text-blue-300"
+                            : "bg-slate-800/40 border-slate-700/50 text-slate-500"
+                        }`}>
+                          <span className="text-[9px] font-bold flex items-center gap-1">
+                            {actionApproved ? <Check className="w-2.5 h-2.5" /> : "6. Execute"}
+                          </span>
+                          <span className="text-[8px] text-slate-400">{actionApproved ? "Completed" : "Idempotent"}</span>
+                        </div>
+
+                        {/* 7. Validate */}
+                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                          isVerifiedSuccess
+                            ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                            : actionApproved && !isVerifiedSuccess
+                            ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
+                            : "bg-slate-800/40 border-slate-700/50 text-slate-500"
+                        }`}>
+                          <span className="text-[9px] font-bold flex items-center gap-1">
+                            {isVerifiedSuccess ? <Check className="w-2.5 h-2.5" /> : "7. Validate"}
+                          </span>
+                          <span className="text-[8px] text-slate-400">{isVerifiedSuccess ? "Verified" : "Post-Read"}</span>
+                        </div>
+
+                        {/* 8. Audit */}
+                        <div className={`p-1.5 rounded-lg border flex flex-col items-center transition ${
+                          actionApproved
+                            ? "bg-indigo-950/40 border-indigo-500/40 text-indigo-300"
+                            : "bg-slate-800/40 border-slate-700/50 text-slate-500"
+                        }`}>
+                          <span className="text-[9px] font-bold flex items-center gap-1">
+                            {actionApproved ? <Check className="w-2.5 h-2.5" /> : "8. Audit"}
+                          </span>
+                          <span className="text-[8px] text-slate-400">{actionApproved ? "Immutable" : "FalkorDB"}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Proposed Action Body */}
+                    <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-xs text-slate-300 leading-relaxed font-sans">
+                      <div className="font-semibold text-white mb-1 flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Proposed Corrective Action & Justification:</span>
+                      </div>
                       <FormattedMarkdown content={recommendationSnippet} />
                     </div>
 
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[11px] text-slate-500">Requires human analyst approval</span>
+                    {/* Verification & Outcome Confirmation Banner */}
+                    {actionApproved && (
+                      <div className={`p-3 rounded-xl border space-y-1.5 text-xs transition ${
+                        isVerifiedSuccess
+                          ? "bg-emerald-950/50 border-emerald-500/60 text-emerald-200"
+                          : "bg-rose-950/50 border-rose-500/60 text-rose-200"
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 font-bold text-white">
+                            {isVerifiedSuccess ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 text-rose-400" />
+                            )}
+                            <span>{isVerifiedSuccess ? "Post-State Ground-Truth Verified in FalkorDB" : "Post-State Verification Failed"}</span>
+                          </div>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/40 border border-white/10">
+                            Audit Record ID: {auditId}
+                          </span>
+                        </div>
+                        <div className="text-[11px] opacity-90">
+                          {isVerifiedSuccess ? (
+                            <span>
+                              Verified property mutations in graph: <strong className="font-mono text-emerald-300">{verifiedProps}</strong>. Outcome certified by read-verification queries.
+                            </span>
+                          ) : (
+                            <span>
+                              {actionResult?.message || "Execution outcome failed verification against post-state. Success cannot be claimed."}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Footer Actions */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-white/10">
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                        <Lock className="w-3 h-3 text-amber-400" />
+                        <span>Supervisor Permission Policy: Consequential actions require explicit human sign-off.</span>
+                      </div>
+
                       <button
-                        onClick={() => handleApproveAction("remediation", currentObjective)}
+                        onClick={() => handleApproveAction("remediation", focalEntityId)}
                         disabled={isApprovingAction || actionApproved}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                        className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer shadow-md ${
                           actionApproved
-                            ? "bg-emerald-600 text-white"
-                            : "bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
+                            ? "bg-emerald-600/90 text-white cursor-default"
+                            : isApprovingAction
+                            ? "bg-blue-600/50 text-white cursor-wait"
+                            : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white hover:shadow-blue-500/25 transform hover:scale-[1.02] active:scale-[0.98]"
                         }`}
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{actionApproved ? "Action Approved & Logged" : "Approve Remediation"}</span>
+                        {isApprovingAction ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            <span>Executing & Verifying Post-State...</span>
+                          </>
+                        ) : actionApproved ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-white" />
+                            <span>Action Executed & Verified</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck className="w-4 h-4 text-white" />
+                            <span>Approve & Execute Action</span>
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>

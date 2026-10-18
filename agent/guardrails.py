@@ -45,6 +45,8 @@ READ_ONLY_ALLOWED_TOOLS = {
     "run_read_only_cypher_query",
     "cross_link",
     "list_database_graphs",
+    "validate_action_outcome",
+    "get_action_audit_trail",
 }
 
 

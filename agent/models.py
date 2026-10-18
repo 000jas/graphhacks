@@ -139,3 +139,83 @@ class InvestigationEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class ActionLifecycleStage(str, Enum):
+    """The 8 explicit stages of the GraphOS Action Lifecycle."""
+    DETECT = "detect"
+    INVESTIGATE = "investigate"
+    PLAN = "plan"
+    VERIFY = "verify"
+    REQUEST_APPROVAL = "request_approval"
+    EXECUTE = "execute"
+    VALIDATE = "validate"
+    AUDIT = "audit"
+
+
+class ActionRiskLevel(str, Enum):
+    """Risk classification evaluated during the Verify stage."""
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+@dataclass
+class ActionValidationResult:
+    """Post-execution ground-truth verification result."""
+    validated: bool
+    target_id: str
+    expected_state: dict[str, Any] = field(default_factory=dict)
+    actual_state: dict[str, Any] = field(default_factory=dict)
+    verified_properties: list[str] = field(default_factory=list)
+    discrepancies: list[str] = field(default_factory=list)
+    verified_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ActionLifecycleRecord:
+    """End-to-end trace of an action across the full lifecycle."""
+    lifecycle_id: str
+    current_stage: ActionLifecycleStage
+    domain: str
+    objective: str
+    action_type: str
+    target_id: str
+    params: dict[str, Any] = field(default_factory=dict)
+    rationale: str = ""
+    risk_level: ActionRiskLevel = ActionRiskLevel.MEDIUM
+    is_consequential: bool = True
+    requires_human_approval: bool = True
+    proposal_id: Optional[str] = None
+    approval_token: Optional[str] = None
+    is_approved: bool = False
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    execution_id: Optional[str] = None
+    executed: bool = False
+    executed_at: Optional[str] = None
+    validation: Optional[ActionValidationResult] = None
+    post_state_verified: bool = False
+    audit_record_id: Optional[str] = None
+    stage_history: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def record_stage(self, stage: ActionLifecycleStage, message: str, data: Optional[dict[str, Any]] = None) -> None:
+        self.current_stage = stage
+        self.stage_history.append({
+            "stage": stage.value,
+            "message": message,
+            "data": data or {},
+            "timestamp": utc_now_iso(),
+        })
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["current_stage"] = self.current_stage.value
+        d["risk_level"] = self.risk_level.value
+        return d

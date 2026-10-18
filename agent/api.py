@@ -905,13 +905,6 @@ class IngestCsvRequest(BaseModel):
     domain: str = Field("general", description="Domain classification: 'general', 'fraud', 'security'")
 
 
-class ApproveActionRequest(BaseModel):
-    action_type: str = Field(..., description="Remediation action type")
-    target_id: str = Field(..., description="Target entity identifier")
-    rationale: str = Field(..., description="Operational justification")
-    tenant_graph: Optional[str] = Field(None, description="Active tenant graph")
-
-
 @app.post("/api/ingest/code-json")
 async def ingest_code_ast_json(req: IngestCodeJsonRequest) -> dict[str, Any]:
     """Ingest parsed code AST / JSON from CLI code parser into FalkorDB Cloud."""
@@ -942,9 +935,157 @@ async def ingest_csv_dataset(req: IngestCsvRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+class ApproveActionRequest(BaseModel):
+    action_type: str = Field(..., description="Remediation action type")
+    target_id: str = Field(..., description="Target entity identifier")
+    rationale: str = Field(..., description="Operational justification")
+    params: Optional[dict[str, Any]] = Field(default_factory=dict, description="Optional action parameters")
+    tenant_graph: Optional[str] = Field(None, description="Active tenant graph")
+
+
+class PlanActionRequest(BaseModel):
+    objective: str = Field(..., description="Action objective or detected issue")
+    target_id: Optional[str] = Field(None, description="Optional target entity ID")
+    action_type: Optional[str] = Field(None, description="Optional proposed action type")
+    params: Optional[dict[str, Any]] = Field(default_factory=dict, description="Action parameters")
+    rationale: Optional[str] = Field(None, description="Operational justification")
+    tenant_graph: Optional[str] = Field(None, description="Target graph name override")
+
+
+class ExecuteActionRequest(BaseModel):
+    proposal_id: str = Field(..., description="Action proposal identifier")
+    approval_token: str = Field(..., description="Cryptographic or analyst approval token")
+    action_type: Optional[str] = Field(None, description="Action type for tracking")
+    target_id: Optional[str] = Field(None, description="Target entity ID")
+    approved_by: Optional[str] = Field("analyst", description="Analyst identity or system approver")
+    tenant_graph: Optional[str] = Field(None, description="Target graph name override")
+
+
+class ValidateActionRequest(BaseModel):
+    action_type: str = Field(..., description="Action type to validate")
+    target_id: str = Field(..., description="Target entity ID to inspect")
+    params: Optional[dict[str, Any]] = Field(default_factory=dict, description="Parameters that were applied")
+    tenant_graph: Optional[str] = Field(None, description="Target graph name override")
+
+
+@app.post("/api/actions/plan")
+async def plan_action_lifecycle_endpoint(req: PlanActionRequest) -> dict[str, Any]:
+    """
+    Execute Stages 1-5 of the Action Lifecycle:
+    Detect -> Investigate -> Plan -> Verify -> Request Approval.
+    Returns the action proposal, blast radius, and risk evaluation awaiting human supervisor approval.
+    """
+    target_graph = req.tenant_graph or settings.graph_name
+    if target_graph and is_system_graph(target_graph):
+        raise HTTPException(status_code=403, detail=f"Cannot plan actions on internal system graph '{target_graph}'.")
+
+    try:
+        from agent.supervisor import ActionSupervisor
+        supervisor = ActionSupervisor(settings=settings)
+        record = await supervisor.run_plan_phase(
+            objective=req.objective,
+            target_id=req.target_id,
+            action_type=req.action_type,
+            params=req.params,
+            rationale=req.rationale,
+            tenant_graph=target_graph,
+        )
+        return {
+            "status": "success",
+            "lifecycle": record.to_dict(),
+        }
+    except Exception as exc:
+        logger.error(f"Failed to plan action lifecycle: {exc}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/actions/execute")
+async def execute_action_lifecycle_endpoint(req: ExecuteActionRequest) -> dict[str, Any]:
+    """
+    Execute Stages 6-8 of the Action Lifecycle:
+    Execute -> Validate -> Audit.
+    Enforces human approval token, validates actual post-state in graph, and records audit trail.
+    """
+    target_graph = req.tenant_graph or settings.graph_name
+    if target_graph and is_system_graph(target_graph):
+        raise HTTPException(status_code=403, detail=f"Cannot execute actions on internal system graph '{target_graph}'.")
+
+    try:
+        from mcp_server.decision_memory import execute_approved_action, get_action_audit_trail
+        exec_result = execute_approved_action(
+            proposal_id=req.proposal_id,
+            approval_token=req.approval_token,
+            graph_name=target_graph,
+        )
+
+        validated = exec_result.get("validated", False)
+        audit_records = get_action_audit_trail(proposal_id=req.proposal_id, graph_name=target_graph)
+
+        return {
+            "status": "success" if validated else "failed_validation",
+            "proposal_id": req.proposal_id,
+            "executed": exec_result.get("executed", False),
+            "validated": validated,
+            "execution": exec_result,
+            "audit_trail": audit_records.get("records", []),
+            "message": exec_result.get("message", ""),
+        }
+    except Exception as exc:
+        logger.error(f"Failed to execute action lifecycle: {exc}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/actions/validate")
+async def validate_action_endpoint(req: ValidateActionRequest) -> dict[str, Any]:
+    """
+    Inspect post-execution ground truth in FalkorDB directly to verify entity properties and relations.
+    """
+    target_graph = req.tenant_graph or settings.graph_name
+    try:
+        from mcp_server.decision_memory import validate_action_outcome
+        val_result = validate_action_outcome(
+            action=req.action_type,
+            target_id=req.target_id,
+            params=req.params,
+            graph_name=target_graph,
+        )
+        return {
+            "status": "success",
+            "target_id": req.target_id,
+            "validation": val_result,
+        }
+    except Exception as exc:
+        logger.error(f"Failed to validate action outcome: {exc}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/actions/audit-trail")
+async def get_audit_trail_endpoint(
+    proposal_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    tenant_graph: Optional[str] = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """
+    Query immutable audit records from FalkorDB.
+    """
+    target_graph = tenant_graph or settings.graph_name
+    try:
+        from mcp_server.decision_memory import get_action_audit_trail
+        return get_action_audit_trail(
+            proposal_id=proposal_id or "",
+            target_id=target_id or "",
+            limit=limit,
+            graph_name=target_graph,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to query audit trail: {exc}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/api/remediation/approve")
 async def approve_remediation_action(req: ApproveActionRequest) -> dict[str, Any]:
-    """Approve and record durable remediation action into decision memory."""
+    """Approve, execute, ground-truth validate, and record durable remediation action into decision memory."""
     target_graph = req.tenant_graph or settings.graph_name
     if target_graph and is_system_graph(target_graph):
         raise HTTPException(status_code=403, detail=f"Cannot execute remediation on internal system graph '{target_graph}'.")
@@ -954,6 +1095,7 @@ async def approve_remediation_action(req: ApproveActionRequest) -> dict[str, Any
             action=req.action_type,
             target_id=req.target_id,
             rationale=req.rationale or f"Human-in-the-loop analyst approved {req.action_type} on {req.target_id}",
+            params=req.params or {},
             graph_name=target_graph,
         )
         token = proposal.get("approval_token")
@@ -964,11 +1106,16 @@ async def approve_remediation_action(req: ApproveActionRequest) -> dict[str, Any
                 approval_token=token,
                 graph_name=target_graph,
             )
+            validated = record.get("validated", False)
             return {
-                "status": "approved",
+                "status": "approved" if validated else "failed_validation",
                 "action_type": req.action_type,
                 "target_id": req.target_id,
                 "proposal_id": prop_id,
+                "executed": record.get("executed", False),
+                "validated": validated,
+                "validation": record.get("validation", {}),
+                "audit_trail_id": record.get("audit_trail_id"),
                 "record": record,
             }
         else:

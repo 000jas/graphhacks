@@ -41,11 +41,13 @@ try:
     from mcp_server.db import execute_ro_query, list_available_graphs
     from mcp_server.decision_memory import (
         execute_approved_action as exec_approved_action,
+        get_action_audit_trail as get_audit_trail,
         propose_action as prop_action,
         query_decision_memory as query_dec_memory,
         record_investigation_finding as rec_inv_finding,
         record_outcome as rec_outcome,
         supersede_finding as sup_finding,
+        validate_action_outcome as val_action_outcome,
     )
     from mcp_server.evidence_quality import (
         detect_conflicting_evidence as detect_conflicts,
@@ -100,11 +102,13 @@ except ImportError:
     from db import execute_ro_query, list_available_graphs
     from decision_memory import (
         execute_approved_action as exec_approved_action,
+        get_action_audit_trail as get_audit_trail,
         propose_action as prop_action,
         query_decision_memory as query_dec_memory,
         record_investigation_finding as rec_inv_finding,
         record_outcome as rec_outcome,
         supersede_finding as sup_finding,
+        validate_action_outcome as val_action_outcome,
     )
     from evidence_quality import (
         detect_conflicting_evidence as detect_conflicts,
@@ -1357,6 +1361,51 @@ def execute_approved_action(
     result = exec_approved_action(
         proposal_id=proposal_id,
         approval_token=approval_token,
+        graph_name=target_graph,
+    )
+    result["tenant_graph"] = target_graph
+    return serialize_json(result)
+
+
+@mcp.tool()
+def validate_action_outcome(
+    action: str,
+    target_id: str,
+    params: Optional[dict[str, Any]] = None,
+    expected_changes: Optional[list[dict[str, Any]]] = None,
+    tenant_graph: str = "",
+) -> str:
+    """
+    Verify the ground-truth outcome of an action by directly inspecting graph state in FalkorDB.
+    Never claims success unless confirmed by actual post-state read queries.
+    """
+    target_graph = settings.validate_graph_name(tenant_graph)
+    result = val_action_outcome(
+        action=action,
+        target_id=target_id,
+        params=params or {},
+        expected_changes=expected_changes or [],
+        graph_name=target_graph,
+    )
+    result["tenant_graph"] = target_graph
+    return serialize_json(result)
+
+
+@mcp.tool()
+def get_action_audit_trail(
+    proposal_id: str = "",
+    target_id: str = "",
+    limit: int = 20,
+    tenant_graph: str = "",
+) -> str:
+    """
+    Retrieve durable, verified audit records from FalkorDB with full provenance and verification proof.
+    """
+    target_graph = settings.validate_graph_name(tenant_graph)
+    result = get_audit_trail(
+        proposal_id=proposal_id,
+        target_id=target_id,
+        limit=limit,
         graph_name=target_graph,
     )
     result["tenant_graph"] = target_graph

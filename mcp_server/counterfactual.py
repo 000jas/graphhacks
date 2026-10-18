@@ -142,6 +142,112 @@ def simulate_candidate_action(
             "Configure automatic rollback trigger upon HTTP 5xx error threshold > 0.1%.",
         ]
 
+    elif action.upper() in {"QUARANTINE_NODE", "FREEZE_ACCOUNT", "BLOCK_IP", "ISOLATE_HOST", "QUARANTINE"}:
+        target_status = params.get("new_status") or "quarantined"
+        projected_changes.append({
+            "operation": "UPDATE_PROPERTY",
+            "entity_id": target_id,
+            "property": "status",
+            "from_value": t_status,
+            "to_value": target_status,
+            "reason": f"Isolate compromised or anomalous entity '{t_name}' to halt spread/loss",
+        })
+        reversible = True
+        risk_level = "HIGH"
+        mitigation_steps = [
+            f"Notify entity owner/team of {target_status} status.",
+            "Record incident ticket reference in organizational memory.",
+            "Schedule post-containment review within 48 hours.",
+        ]
+
+    elif action.upper() in {"REVOKE_ACCESS", "REMOVE_RELATIONSHIP"}:
+        rel_type = params.get("rel_type") or params.get("relationship") or "ACCESSES"
+        rel_target = params.get("related_entity_id") or params.get("role_id") or "all_associated"
+        projected_changes.append({
+            "operation": "REMOVE_EDGE",
+            "relationship": rel_type,
+            "source_id": target_id,
+            "target_id": rel_target,
+            "reason": f"Revoke excessive/compromised access relationship '{rel_type}'",
+        })
+        reversible = True
+        risk_level = "HIGH"
+        mitigation_steps = [
+            "Verify downstream dependent services do not crash without fallback credentials.",
+            "Issue scoped credentials with least-privilege permissions.",
+        ]
+
+    elif action.upper() in {"MERGE_DUPLICATES", "MERGE_ENTITIES"}:
+        canonical_id = params.get("canonical_id") or params.get("target_id_primary") or ""
+        projected_changes.append({
+            "operation": "CREATE_EDGE",
+            "relationship": "MERGED_INTO",
+            "source_id": target_id,
+            "target_id": canonical_id or "canonical_record",
+            "reason": f"Reconcile duplicate graph entity '{t_name}' into canonical profile",
+        })
+        projected_changes.append({
+            "operation": "UPDATE_PROPERTY",
+            "entity_id": target_id,
+            "property": "status",
+            "from_value": t_status,
+            "to_value": "merged_inactive",
+        })
+        reversible = True
+        risk_level = "MEDIUM"
+        mitigation_steps = [
+            "Ensure transaction and relationship history is preserved on canonical node.",
+            "Audit identity verification attributes across both records.",
+        ]
+
+    elif action.upper() in {"UPDATE_PROPERTY", "SET_PROPERTY"}:
+        prop_name = params.get("property_name") or params.get("property") or "status"
+        new_val = params.get("new_value", params.get("value"))
+        curr_val = t_props.get(prop_name, t_status if prop_name == "status" else None)
+        projected_changes.append({
+            "operation": "UPDATE_PROPERTY",
+            "entity_id": target_id,
+            "property": prop_name,
+            "from_value": curr_val,
+            "to_value": new_val,
+        })
+        reversible = True
+        risk_level = "MEDIUM"
+        mitigation_steps = ["Verify property schema compliance before and after mutation."]
+
+    elif action.upper() in {"UPDATE_STATUS", "SET_STATUS"}:
+        new_status = params.get("new_status") or params.get("status") or "updated"
+        projected_changes.append({
+            "operation": "UPDATE_PROPERTY",
+            "entity_id": target_id,
+            "property": "status",
+            "from_value": t_status,
+            "to_value": new_status,
+        })
+        reversible = True
+        risk_level = "MEDIUM"
+        mitigation_steps = ["Confirm downstream consumers accommodate the new lifecycle status."]
+
+    elif action.upper() in {"APPLY_SECURITY_PATCH", "REMEDIATE_VULNERABILITY"}:
+        projected_changes.append({
+            "operation": "UPDATE_PROPERTY",
+            "entity_id": target_id,
+            "property": "status",
+            "from_value": t_status,
+            "to_value": "mitigated",
+        })
+        if params.get("patch_version"):
+            projected_changes.append({
+                "operation": "UPDATE_PROPERTY",
+                "entity_id": target_id,
+                "property": "patch_version",
+                "from_value": t_props.get("patch_version"),
+                "to_value": params["patch_version"],
+            })
+        reversible = True
+        risk_level = "MEDIUM"
+        mitigation_steps = ["Run regression and integration tests to verify vulnerability patch."]
+
     else:
         projected_changes.append({
             "operation": "GENERIC_INTERVENTION",

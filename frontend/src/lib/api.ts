@@ -8,7 +8,16 @@ import {
   ConversationDetail,
 } from "../types";
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+const RENDER_PROD_URL = "https://graphhacks-s5ln.onrender.com";
+
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
+    ? RENDER_PROD_URL
+    : process.env.NODE_ENV === "production"
+    ? RENDER_PROD_URL
+    : "http://localhost:8000")
+).replace(/\/+$/, "");
 
 export function getAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
@@ -289,7 +298,8 @@ export async function approveRemediation(
   actionType: string,
   targetId: string,
   rationale: string,
-  tenantGraph?: string
+  tenantGraph?: string,
+  params?: Record<string, any>
 ): Promise<any> {
   const res = await fetch(`${API_BASE_URL}/api/remediation/approve`, {
     method: "POST",
@@ -300,10 +310,113 @@ export async function approveRemediation(
       target_id: targetId,
       rationale,
       tenant_graph: tenantGraph,
+      params: params || {},
     }),
   });
   if (!res.ok) {
     throw new Error("Failed to approve remediation action");
+  }
+  return await res.json();
+}
+
+export async function planActionLifecycle(
+  objective: string,
+  targetId?: string,
+  actionType?: string,
+  params?: Record<string, any>,
+  rationale?: string,
+  tenantGraph?: string
+): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/actions/plan`, {
+    method: "POST",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({
+      objective,
+      target_id: targetId,
+      action_type: actionType,
+      params: params || {},
+      rationale,
+      tenant_graph: tenantGraph,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Action planning failed" }));
+    throw new Error(err.detail || "Failed to plan action lifecycle");
+  }
+  return await res.json();
+}
+
+export async function executeActionLifecycle(
+  proposalId: string,
+  approvalToken: string,
+  actionType?: string,
+  targetId?: string,
+  approvedBy?: string,
+  tenantGraph?: string
+): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/actions/execute`, {
+    method: "POST",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({
+      proposal_id: proposalId,
+      approval_token: approvalToken,
+      action_type: actionType,
+      target_id: targetId,
+      approved_by: approvedBy || "analyst",
+      tenant_graph: tenantGraph,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Action execution failed" }));
+    throw new Error(err.detail || "Failed to execute action lifecycle");
+  }
+  return await res.json();
+}
+
+export async function validateActionOutcome(
+  actionType: string,
+  targetId: string,
+  params?: Record<string, any>,
+  tenantGraph?: string
+): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/actions/validate`, {
+    method: "POST",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({
+      action_type: actionType,
+      target_id: targetId,
+      params: params || {},
+      tenant_graph: tenantGraph,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error("Failed to validate action outcome");
+  }
+  return await res.json();
+}
+
+export async function getActionAuditTrail(
+  proposalId?: string,
+  targetId?: string,
+  tenantGraph?: string,
+  limit: number = 20
+): Promise<any> {
+  const params = new URLSearchParams();
+  if (proposalId) params.append("proposal_id", proposalId);
+  if (targetId) params.append("target_id", targetId);
+  if (tenantGraph) params.append("tenant_graph", tenantGraph);
+  params.append("limit", limit.toString());
+
+  const res = await fetch(`${API_BASE_URL}/api/actions/audit-trail?${params.toString()}`, {
+    method: "GET",
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new Error("Failed to fetch action audit trail");
   }
   return await res.json();
 }
